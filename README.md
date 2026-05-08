@@ -1,1 +1,0 @@
-# tdarr_plugin
