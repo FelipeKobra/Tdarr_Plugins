@@ -3,17 +3,24 @@
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC',
   Stage: 'Pre-processing',
-  Name: 'FelipeKbra - H264/HEVC to NVENC (hvc1 + CFR)',
+  Name: 'FelipeKbra - H264/HEVC to NVENC (hvc1 + Size Filter)',
   Type: 'Video',
   Operation: 'Transcode',
   Description:
     `This plugin converts videos to HEVC using NVENC, ensuring:
     1. hvc1 Tag (Apple/Plex Compatibility).
-    2. CFR 23.976fps (Fixes Variable Frame Rate/Audio Sync issues).
-    3. 10-bit and Optional HDR support.`,
-  Version: '2.0',
-  Tags: 'pre-processing,ffmpeg,nvenc h265, hdr, cfr, hvc1',
+    2. 10-bit and Optional HDR support.
+    3. Minimum file size skip logic.`,
+  Version: '2.4',
+  Tags: 'pre-processing,ffmpeg,nvenc h265, hdr, hvc1, size filter',
   Inputs: [
+    {
+      name: 'min_file_size_mb',
+      type: 'number',
+      defaultValue: 7000,
+      inputUI: { type: 'text' },
+      tooltip: 'Skip processing if file size (MB) is below this value (only for files that are already technically healthy but missing the tag).',
+    },
     {
       name: 'target_bitrate_480p576p',
       type: 'number',
@@ -74,7 +81,7 @@ const details = () => ({
       tooltip: 'Will reconvert HEVC files above bitrate filter or missing hvc1 tag.',
     },
     {
-      name: 'reconvert_hdr',
+      name: 'keep_hdr',
       type: 'boolean',
       defaultValue: false,
       inputUI: { type: 'dropdown', options: ['false', 'true'] },
@@ -127,14 +134,14 @@ const details = () => ({
       type: 'boolean',
       defaultValue: true,
       inputUI: { type: 'dropdown', options: ['false', 'true'] },
-	   tooltip: 'Needs to exact match de tag name.',
+       tooltip: 'Needs to exact match the tag name.',
     },
     {
       name: 'continueIfTagFound',
       type: 'boolean',
       defaultValue: false,
       inputUI: { type: 'dropdown', options: ['false', 'true'] },
-	   tooltip: 'This might create a loop, dont use it.',
+       tooltip: 'This might create a loop, do not use it.',
     },
   ],
 });
@@ -183,22 +190,6 @@ function loopOverStreamsOfType(file, type, method) {
   }
 }
 
-function checkHDRMetadata(stream, id, inputs, logger, configuration) {
-  const hdrColorSpaces = ['smpte2084', 'bt2020', 'bt2020nc'];
-  if (stream.color_space && hdrColorSpaces.includes(stream.color_space)) {
-    if (!inputs.reconvert_hdr) {
-      logger.AddError(`HDR detected on stream ${id} but 'reconvert_hdr' is disabled. Skipping file.`);
-      return false;
-    }
-    logger.Add(`HDR detected on stream ${id}. Applying HDR-specific metadata flags.`);
-    if (stream.color_space === 'bt2020nc' || stream.color_space === 'bt2020') {
-      configuration.AddOutputSetting(' -strict unofficial -color_primaries bt2020 -colorspace bt2020nc -color_trc smpte2084 ');
-    }
-    return true;
-  }
-  return true;
-}
-
 function buildVideoConfiguration(inputs, file, logger) {
   const configuration = new Configurator(['-map 0']);
   const tiered = {
@@ -215,32 +206,35 @@ function buildVideoConfiguration(inputs, file, logger) {
     mpeg2: '-c:v mpeg2_cuvid', vc1: '-c:v vc1_cuvid', vp8: '-c:v vp8_cuvid', vp9: '-c:v vp9_cuvid',
   };
 
-  function videoProcess(stream, id) {
+function videoProcess(stream, id) {
+    logger.Add(`DEBUG: Checking Stream ${id} | Codec: ${stream.codec_name} | Tag: ${stream.codec_tag_string} | Color Space: ${stream.color_space}`);
+
     if (stream.codec_name === 'mjpeg') {
       configuration.AddOutputSetting(`-map -v:${id}`);
       logger.Add(`Mapping out MJPEG stream (poster art) at stream index ${id}.`);
       return;
     }
-    if (!checkHDRMetadata(stream, id, inputs, logger, configuration)) return;
 
-    // --- VFR (Variable Frame Rate) DETECTION ---
-    const isVFR = stream.avg_frame_rate !== stream.r_frame_rate;
-    if (isVFR) { logger.Add(`VFR detected on stream ${id}. Forcing Constant Frame Rate (CFR).`); }
+    const hdrColorSpaces = ['smpte2084', 'bt2020', 'bt2020nc'];
+    const isHDR = stream.color_space && hdrColorSpaces.includes(stream.color_space);
+    let videoFilters = '';
 
-    // --- SKIP LOGIC ---
+    if (isHDR) {
+      if (inputs.keep_hdr) {
+        logger.Add(`HDR detected on stream ${id}. Keeping HDR and applying metadata flags.`);
+        configuration.AddOutputSetting(' -strict unofficial -color_primaries bt2020 -colorspace bt2020nc -color_trc smpte2084 ');
+      } else {
+        logger.Add(`HDR detected on stream ${id} and 'keep_hdr' is disabled. Converting to SDR (Tone Mapping).`);
+        videoFilters = '-vf "zscale=t=linear:npl=100,format=gbrp,zscale=p=bt709,zscale=t=bt709:m=bt709,format=yuv420p10le"';
+      }
+    }
+
     const videoTag = stream.codec_tag_string || '';
-    const fileSizeMB = file.file_size; 
     
-    // Condition to Skip: HEVC AND < 7GB AND Tagged hvc1 AND Not VFR
-    if (stream.codec_name === 'hevc' && fileSizeMB < 7000 && videoTag === 'hvc1' && !isVFR) {
-      logger.AddSuccess(`File is already healthy HEVC (<7GB, hvc1, CFR). Skipping transcode.`);
+    // Skip Logic (Checks if already perfect)
+    if (stream.codec_name === 'hevc' && videoTag === 'hvc1' && (!isHDR || (isHDR && inputs.keep_hdr))) {
+      logger.AddSuccess(`File is already healthy HEVC (hvc1, HDR/SDR Correct).`);
       return;
-    } else {
-        if (stream.codec_name === 'hevc') {
-            if (videoTag !== 'hvc1') logger.Add(`HEVC detected but tag is [${videoTag}] (Needs hvc1).`);
-            if (isVFR) logger.Add(`Frame rate is variable (VFR) (Needs CFR for sync).`);
-            if (fileSizeMB >= 7000) logger.Add(`File size (${fileSizeMB.toFixed(2)}MB) exceeds 7GB limit.`);
-        }
     }
 
     const filters = {
@@ -260,7 +254,7 @@ function buildVideoConfiguration(inputs, file, logger) {
     }
 
     if (filterBitrate > 0 && (stream.codec_name === 'hevc' || stream.codec_name === 'vp9')) {
-        if (file.bit_rate < filterBitrate && videoTag === 'hvc1' && !isVFR) {
+        if (file.bit_rate < filterBitrate && videoTag === 'hvc1' && (!isHDR || (isHDR && inputs.keep_hdr))) {
             logger.AddSuccess(`HEVC Bitrate (${file.bit_rate}) is below filter (${filterBitrate}). Skipping.`);
             return;
         }
@@ -275,19 +269,15 @@ function buildVideoConfiguration(inputs, file, logger) {
       let bitrateTarget = (bitrateProbe < parseInt(tier.bitrate)) ? parseInt(bitrateProbe * inputs.target_pct_reduction) : parseInt(tier.bitrate);
       const bitrateMax = bitrateTarget + tier.max_increase;
 
-      // SPEED PRESET
       const preset = inputs.nvenc_preset || 'slow';
-      
-      // DYNAMIC METADATA COMMENT
       const dynamicMeta = `-metadata ${inputs.tagName}=${inputs.tagValues}`;
 
-      // FINAL OUTPUT FLAGS
-      configuration.AddOutputSetting(`-c:v hevc_nvenc -tag:v hvc1 -r 24000/1001 -vsync cfr -profile:v main10 -pix_fmt:v p010le -qmin 0 -cq:v ${tier.cq} -b:v ${bitrateTarget}k -maxrate:v ${bitrateMax}k -preset ${preset} -rc-lookahead 32 -spatial_aq:v 1 -aq-strength:v 15 ${dynamicMeta}`);
+      configuration.AddOutputSetting(`${videoFilters} -c:v hevc_nvenc -tag:v hvc1 -profile:v main10 -pix_fmt:v p010le -qmin 0 -cq:v ${tier.cq} -b:v ${bitrateTarget}k -maxrate:v ${bitrateMax}k -preset ${preset} -rc-lookahead 32 -spatial_aq:v 1 -aq-strength:v 15 ${dynamicMeta}`);
       
       const decoderSetting = inputDecoderSettings[file.video_codec_name];
       if (decoderSetting?.trim()) configuration.AddInputSetting(decoderSetting);
 
-      logger.Add(`Transcoding stream ${id} to HEVC (NVENC | Preset: ${preset} | Tag: hvc1 | CFR | FastStart)`);
+      logger.Add(`Transcoding stream ${id} to HEVC (NVENC | ToneMapping: ${!inputs.keep_hdr && isHDR ? 'YES' : 'NO'})`);
     }
   }
 
@@ -318,7 +308,7 @@ function checkTags(file, inputs) {
       response.infoLog += `Metadata tag [${tagName}] with value [${tagValues}] was found.\n`;
       response.processFile = inputs.continueIfTagFound;
   } else {
-      response.infoLog += `Metadata tag [${tagName}] not found. Proceeding with analysis.\n`;
+      response.infoLog += `Metadata tag [${tagName}] not found. Proceeding with transcode.\n`;
       response.processFile = true;
   }
   return response;
@@ -337,12 +327,6 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     reQueueAfter: true,
   };
   const logger = new Log();
-  
-  const tagCheck = checkTags(file, inputs);
-  if (!tagCheck.processFile) {
-      response.infoLog += tagCheck.infoLog;
-      return response;
-  }
 
   if (checkAbort(inputs, file, logger)) {
     response.infoLog += logger.GetLogData();
@@ -350,23 +334,55 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   }
 
   const videoSettings = buildVideoConfiguration(inputs, file, logger);
-  const audioSettings = buildAudioConfiguration(inputs, file, logger);
-  const subtitleSettings = buildSubtitleConfiguration(inputs, file, logger);
-
-  let inputOptions = '-hwaccel cuda -hwaccel_output_format cuda -analyzeduration 2147483647 -probesize 2147483647';
-  if (videoSettings.GetInputSettings().trim()) inputOptions += ` ${videoSettings.GetInputSettings()}`;
-
-  let outputOptions = `${videoSettings.GetOutputSettings()} ${audioSettings.GetOutputSettings()} ${subtitleSettings.GetOutputSettings()} -max_muxing_queue_size 9999`;
   
-  if (inputs.bframes) {
-      outputOptions += ' -bf 2 -b_ref_mode middle';
-      logger.Add('B-Frames enabled (Turing+ Architecture required).');
+  if (videoSettings.shouldProcess) {
+    // MANDATORY TRANSCODE (H264, Wrong Tag, Bitrate high, HDR issue)
+    // We ignore file size here to ensure health.
+    response.processFile = true;
+    logger.Add("File requires technical correction (Codec/Tag/Bitrate/HDR). Proceeding regardless of size.");
+  } else {
+    // TECHNICALLY HEALTHY (HEVC + hvc1)
+    // Check if the metadata tag exists.
+    const tagCheck = checkTags(file, inputs);
+    
+    if (tagCheck.processFile) { 
+      // Tag is missing. Now check the SIZE filter.
+      const fileSizeMB = file.file_size; // Tdarr file_size is in MB
+      const minSize = inputs.min_file_size_mb || 0;
+
+      if (minSize > 0 && fileSizeMB < minSize) {
+        response.processFile = false;
+        logger.Add(`File is technically healthy but missing tag. Size (${fileSizeMB.toFixed(2)}MB) is below minimum (${minSize}MB). Skipping.`);
+      } else {
+        response.processFile = true;
+        response.infoLog += tagCheck.infoLog;
+        logger.Add("File is healthy but missing tag. Size is above minimum. Re-tagging.");
+      }
+    } else {
+      // Tag found, skip.
+      response.processFile = tagCheck.processFile;
+      response.infoLog += tagCheck.infoLog;
+    }
   }
-  
-  response.preset = `${inputOptions.trim()},${outputOptions.trim()}`;
-  response.processFile = videoSettings.shouldProcess;
+
+  if (response.processFile) {
+    const audioSettings = buildAudioConfiguration(inputs, file, logger);
+    const subtitleSettings = buildSubtitleConfiguration(inputs, file, logger);
+
+    let inputOptions = '-hwaccel cuda -analyzeduration 2147483647 -probesize 2147483647';
+    if (videoSettings.GetInputSettings().trim()) inputOptions += ` ${videoSettings.GetInputSettings()}`;
+
+    let outputOptions = `${videoSettings.GetOutputSettings()} ${audioSettings.GetOutputSettings()} ${subtitleSettings.GetOutputSettings()} -max_muxing_queue_size 9999`;
+    
+    if (inputs.bframes) {
+        outputOptions += ' -bf 2 -b_ref_mode middle';
+        logger.Add('B-Frames enabled.');
+    }
+    
+    response.preset = `${inputOptions.trim()},${outputOptions.trim()}`;
+  }
+
   response.infoLog += logger.GetLogData();
-  
   return response;
 };
 
