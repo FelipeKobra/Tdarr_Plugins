@@ -56,7 +56,7 @@ const details = () => ({
     {
       name: "nvenc_preset",
       type: "string",
-      defaultValue: "p4",
+      defaultValue: "slow",
       inputUI: {
         type: "dropdown",
         options: ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "slow", "medium", "fast"],
@@ -89,12 +89,14 @@ const details = () => ({
       type: "string",
       defaultValue: "comment",
       inputUI: { type: "text" },
+	  tooltip: "Tag name to tell it was processed and checked",
     },
     {
       name: "tagValues",
       type: "string",
       defaultValue: "processed",
       inputUI: { type: "text" },
+	  tooltip: "Tag value to tell it was processed and checked",
     }
   ],
 });
@@ -221,10 +223,12 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
 
   // --- STAGE 5: FINAL COMMAND ASSEMBLY ---
   logger.Phase(5, "ENCODER PARAMETERS ASSEMBLY");
+  
   let videoOptions = `-c:v hevc_nvenc -tag:v hvc1 -profile:v main10 -pix_fmt:v p010le -preset ${inputs.nvenc_preset} `;
   videoOptions += `-cq:v 19 -b:v ${targetBitrate}k -maxrate:v ${Math.round(targetBitrate * 1.5)}k -bufsize ${targetBitrate * 2}k `;
   videoOptions += `-spatial_aq:v 1 -rc-lookahead:v 32 -metadata ${inputs.tagName}=${inputs.tagValues} `;
 
+  // HDR / Tonemapping Logic
   if (isHDR && !inputs.keep_hdr) {
     logger.Add("Adding HDR to SDR (Tonemapping) CUDA filters.");
     videoOptions += '-vf "tonemap_cuda=t=bt709:m=bt709:p=bt709:format=p010le" -colorspace bt709 -color_primaries bt709 -color_trc bt709 ';
@@ -238,8 +242,16 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     videoOptions += "-bf 5 ";
   }
 
+  // --- NOVA LÓGICA PARA FASTSTART (MP4) ---
+  let movFlags = "";
+  if (file.container.toLowerCase() === 'mp4' || response.container.toLowerCase() === '.mp4') {
+    logger.Add("Output is MP4: Enabling -movflags +faststart.");
+    movFlags = "-movflags +faststart ";
+  }
+
   response.processFile = true;
-  response.preset = `${hwaccel}, -fflags +genpts -map 0 ${videoOptions} -c:a copy -c:s copy -max_muxing_queue_size 9999`;
+  // Inserido o movFlags e o -threads 1 para otimização de CPU
+  response.preset = `${hwaccel}, -threads 1 -fflags +genpts -map 0 ${videoOptions} -c:a copy -c:s copy ${movFlags}-max_muxing_queue_size 9999`;
 
   logger.AddSuccess("Final FFmpeg command built successfully.");
   response.infoLog = logger.GetLogData();
