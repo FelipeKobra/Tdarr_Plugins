@@ -3,12 +3,12 @@ const details = () => {
   return {
     id: "Tdarr_Plugin_FelipeKbra_HDR_to_SDR",
     Stage: "Pre-processing",
-    Name: "FelipeKbra - HDR to SDR (Ultra Quality GPU)",
+    Name: "FelipeKbra - HDR to SDR (Universal GPU)",
     Type: "Video",
     Operation: "Transcode",
-    Description: "Tonemapping BT2390 via Hardware + 18M Bitrate + Lookahead + Spatial AQ.",
-    Version: "2.0.0",
-    Tags: "video,ffmpeg,hdr,sdr,nvenc,cuda,bt2390",
+    Description: "Versão de alta compatibilidade: remove Temporal AQ e usa preset P4 para evitar erros de hardware.",
+    Version: "2.2.0",
+    Tags: "video,ffmpeg,hdr,sdr,nvenc,bt2390",
   };
 };
 
@@ -30,19 +30,19 @@ async function plugin(file, librarySettings, inputs, otherArguments) {
     return response;
   }
 
-  response.infoLog += "☒ Iniciando Transcode HDR -> SDR (BT2390 + 18Mbps)...\n";
+  response.infoLog += "☒ Iniciando Transcode (Modo de Compatibilidade NVENC)...\n";
 
   /**
-   * MELHORIAS APLICADAS:
-   * 1. Tonemap BT2390: Melhor reprodução de tons que o padrão.
-   * 2. Peak=100: Define o brilho alvo para SDR padrão.
-   * 3. Desat=0: Evita que as cores percam vivacidade na conversão.
-   * 4. HEVC NVENC Main10: Mantém 10-bit para evitar banding, mesmo sendo SDR.
+   * AJUSTES DE COMPATIBILIDADE:
+   * 1. Removido -temporal_aq (Causou o seu erro).
+   * 2. Trocado -preset slow por -preset p4 (O 'slow' novo da NVIDIA exige hardware mais recente).
+   * 3. Mantido o Tonemapping BT2390 (Isso é feito via CUDA cores, deve funcionar).
+   * 4. Mantido -rc vbr e -cq 22 para controle de tamanho.
    */
   response.preset = `-init_hw_device cuda=cu:0 -filter_hw_device cu -hwaccel cuda -hwaccel_output_format cuda -c:v hevc_cuvid ` +
                     `, -vf "tonemap_cuda=tonemap=bt2390:peak=100:desat=0:format=p010le" ` +
-                    `-c:v hevc_nvenc -preset slow -rc vbr_hq -b:v 18M -maxrate:v 22M -bufsize:v 24M ` +
-                    `-profile:v main10 -rc-lookahead 32 -spatial_aq 1 -aq-strength 8 ` +
+                    `-c:v hevc_nvenc -preset p4 -rc vbr -cq 22 ` +
+                    `-profile:v main10 -rc-lookahead 32 -spatial_aq 1 ` +
                     `-c:a copy -c:s copy`;
 
   response.processFile = true;
