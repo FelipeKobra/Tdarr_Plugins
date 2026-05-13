@@ -3,7 +3,7 @@
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC',
   Stage: 'Pre-processing',
-  Name: 'purpan- H264/HEVC to NVENC with Optional HDR',
+  Name: 'FelipeKbra - H264/HEVC to NVENC',
   Type: 'Video',
   Operation: 'Transcode',
   Description:
@@ -435,7 +435,7 @@ function buildVideoConfiguration(inputs, file, logger) {
       const { cq } = tier;
 
       // Add output video encoding settings
-      configuration.AddOutputSetting(`-c:v hevc_nvenc -tag:v hvc1 -profile:v main10 -pix_fmt:v p010le -qmin 0 -cq:v ${cq} -b:v ${bitrateTarget}k -maxrate:v ${bitrateMax}k -preset slow -rc-lookahead 32 -spatial_aq:v 1 -aq-strength:v 15 -metadata comment=processed`);
+      configuration.AddOutputSetting(`-c:v hevc_nvenc -tag:v hvc1 -profile:v main10 -pix_fmt:v p010le -gpu 0 -surfaces 64 -qmin 0 -cq:v ${cq} -b:v ${bitrateTarget}k -maxrate:v ${bitrateMax}k -preset slow -multipass fullres -rc-lookahead 32 -spatial_aq:v 1 -aq-strength:v 15 -threads 1 -metadata comment=processed`);
       
       // Add input decoder settings if specified
       const decoderSetting = inputDecoderSettings[file.video_codec_name];
@@ -563,7 +563,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
 
   // Start with input-specific options
   // -analyzeduration and -probesize are input options
-  let inputOptions = '-analyzeduration 2147483647 -probesize 2147483647';
+  let inputOptions = '-hwaccel cuda -analyzeduration 2147483647 -probesize 2147483647';
   const videoInputSettings = videoSettings.GetInputSettings();
   if (videoInputSettings && videoInputSettings.trim() !== '') {
     inputOptions += ` ${videoInputSettings}`;
