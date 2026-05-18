@@ -12,10 +12,10 @@ const details = () => ({
     When setting the re-encode bitrate filter be aware that it is a file total bitrate, so leave overhead for audio.
 This plugin implements the filter_by_stream_tag plugin to prevent infinite loops caused by reprocessing files above the filter or target bitrate.
 By default, all settings are ideal for most use cases.
-Version 1.3: Corrected FFmpeg command structure for input/output options. Fixed h264_cuvid initialization error.`,
+Version 1.4: Fixed h264_cuvid error for 10-bit H.264 videos. Now uses software decoder for 10-bit content.`,
   //    Original plugin created by tws101 who was inspired by DOOM and MIGZ
   //    This version edited by /u/purpan
-  Version: '1.3',
+  Version: '1.4',
   Tags: 'pre-processing,ffmpeg,nvenc h265, hdr',
   Inputs: [
     {
@@ -241,16 +241,20 @@ class Configurator {
   }
   AddOutputSetting(configuration) {
     this.shouldProcess = true;
-    this.outputSettings.push(configuration);
+    if (!configuration) {
+      return;
+    }
+    if (typeof (configuration) === 'object') {
+      this.outputSettings = this.outputSettings.concat(configuration);
+    } else {
+      this.outputSettings.push(configuration);
+    }
   }
-  ResetOutputSetting(configuration) {
-    this.shouldProcess = false;
-    this.outputSettings = configuration;
+  ResetOutputSettings() {
+    this.outputSettings = [];
   }
-  RemoveOutputSetting(configuration) {
-    const index = this.outputSettings.indexOf(configuration);
-    if (index === -1) return;
-    this.outputSettings.splice(index, 1);
+  ResetInputSettings() {
+    this.inputSettings = [];
   }
   GetOutputSettings() {
     return this.outputSettings.join(' ');
@@ -259,105 +263,113 @@ class Configurator {
     return this.inputSettings.join(' ');
   }
 }
-// #endregion
-// #region Plugin Methods
 /**
-* Abort Section
+* @param {number} bitrateprobe - the bitrateprobe for the file
+* @returns the position of the decimal
 */
-function checkAbort(inputs, file, logger) {
-  if (file.fileMedium !== 'video') {
-    logger.AddError('File is not a video.');
-    return true;
-  }
-  return false;
+function getPosition(bitrateprobe) {
+  return bitrateprobe.toString().indexOf('.');
 }
 /**
-* Calculate Bitrate
+* @param {number} bitrateprobe - the bitrateprobe for the file
+* @returns an integer
+*/
+function parseBitrateProbe(bitrateprobe) {
+  const pos = getPosition(bitrateprobe);
+  if (pos === 0 || pos === -1) {
+    return bitrateprobe;
+  }
+  return parseInt(bitrateprobe.toString().substring(0, pos));
+}
+/**
+* @param {object} file the file object
+* @returns the overall bitrate to compare too.
 */
 function calculateBitrate(file) {
-  let bitrateProbe = file.ffProbeData.streams[0].bit_rate;
-  if (isNaN(bitrateProbe)) {
-    bitrateProbe = file.bit_rate;
-  }
-  return bitrateProbe;
+  try {
+    let duration;
+    if (file.meta && file.meta.Duration) {
+      duration = file.meta.Duration;
+    } else {
+      duration = file.ffProbeData.format.duration;
+    }
+    return file.file_size / (Number(duration) * 0.0075) / 1000.0;
+  } catch (err) { } // eslint-disable-line no-empty
+  return 0;
 }
 /**
-* Loops over the file streams and executes the given method on
-* each stream when the matching codec_type is found.
-* @param {Object} file the file.
-* @param {string} type the typeo of stream.
-* @param {function} method the method to call.
+* Determine if we should abort
+*/
+function checkAbort(inputs, file, logger) {
+  try {
+    if (file.fileMedium !== 'video') {
+      logger.AddError('Not a video file');
+      return true;
+    }
+    return false;
+  } catch (err) {
+    logger.AddError(err);
+    return true;
+  }
+}
+/**
+* function to check video stream for HDR metadata. Adapted from Migz HDR plugin.
+*/
+function checkHDRMetadata(stream, id, inputs, logger, configuration) {
+  if (!inputs.reconvert_hdr && (stream.color_transfer === 'smpte2084' || stream.color_transfer === 'arib-std-b67')) {
+    logger.AddSuccess(`Stream ${id} is HDR (${stream.color_transfer}) and reconvert_hdr is disabled. Copying stream.`);
+    return false;
+  }
+  return true;
+}
+/**
+* loop over a type of stream
 */
 function loopOverStreamsOfType(file, type, method) {
-  let id = 0;
-  for (let i = 0; i < file.ffProbeData.streams.length; i++) {
-    if (file.ffProbeData.streams[i].codec_type.toLowerCase() === type) {
-      method(file.ffProbeData.streams[i], id);
-      id++;
+  if (file.ffProbeData.streams) {
+    for (let i = 0; i < file.ffProbeData.streams.length; i += 1) {
+      if (file.ffProbeData.streams[i].codec_type.toLowerCase() === type) {
+        method(file.ffProbeData.streams[i], i);
+      }
     }
   }
-}
-function checkHDRMetadata(stream, id, inputs, logger, configuration) {
-  const hdrColorSpaces = ['smpte2084', 'bt2020', 'bt2020nc'];
-  logger.Add(`Checking HDR Metadata for video stream ${id}`);
-  if (stream.color_space && hdrColorSpaces.includes(stream.color_space)) {
-    logger.Add(`HDR Color Space detected in video stream ${id}: ${stream.color_space}`);
-    if (!inputs.reconvert_hdr) {
-      logger.AddError(`HDR Metadata detected in video stream ${id}. Skipping encoding due to reconvert_hdr set to false.`);
-      return false; // Returning false to indicate HDR detected but reconvert_hdr is false
-    }
-    logger.AddSuccess(`HDR Metadata detected in video stream ${id}. Maintaining.`);
-    // Add HDR configuration to the output settings
-    if (stream.color_space === 'bt2020nc') {
-      logger.Add(`Applying HDR configuration to stream ${id}: -color_primaries bt2020 -colorspace bt2020nc -color_trc smpte2084`);
-      configuration.AddOutputSetting(' -strict unofficial -color_primaries bt2020 -colorspace bt2020nc -color_trc smpte2084 ');
-    }
-    return true; // HDR detected and reconvert_hdr is true, continue encoding
-  }
-  logger.Add(`No HDR Metadata detected in video stream ${id}. Continuing encoding.`);
-  return true; // HDR not detected, continue encoding
 }
 /**
-* Video, Map EVERYTHING and encode video streams to 265
+* Video Configuration Logic
 */
 function buildVideoConfiguration(inputs, file, logger) {
-  const configuration = new Configurator(['-map 0']); // -map 0 is an output option
+  const configuration = new Configurator(['-map 0', '-c:v copy', '-c:a copy', '-c:s copy']);
   const tiered = {
     '480p': {
       bitrate: inputs.target_bitrate_480p576p,
       max_increase: 100,
-      cq: 22,
+      cq: 27,
     },
     '576p': {
       bitrate: inputs.target_bitrate_480p576p,
       max_increase: 100,
-      cq: 22
+      cq: 27,
     },
     '720p': {
       bitrate: inputs.target_bitrate_720p,
       max_increase: 200,
-      cq: 23
+      cq: 26,
     },
     '1080p': {
       bitrate: inputs.target_bitrate_1080p,
       max_increase: 400,
-      cq: 24
+      cq: 24,
     },
     '4KUHD': {
       bitrate: inputs.target_bitrate_4KUHD,
-      max_increase: 400,
-      cq: 26 ,
-    },
-    Other: {
-      bitrate: inputs.target_bitrate_1080p,
-      max_increase: 400,
-      cq: 24,
+      max_increase: 800,
+      cq: 22,
     },
   };
   // These are HWAccel decoders, thus input options
   const inputDecoderSettings = {
     h263: '-c:v h263_cuvid',
-    h264: '-c:v h264_cuvid', // Allow FFmpeg to auto-select decoder for H264
+    h264: '', // Will be determined dynamically based on bit depth
     mjpeg: '-c:v mjpeg_cuvid',
     mpeg1: '-c:v mpeg1_cuvid',
     mpeg2: '-c:v mpeg2_cuvid',
@@ -437,13 +449,30 @@ function buildVideoConfiguration(inputs, file, logger) {
       // Add output video encoding settings
       configuration.AddOutputSetting(`-c:v hevc_nvenc -tag:v hvc1 -profile:v main10 -pix_fmt:v p010le -gpu 0 -surfaces 64 -qmin 0 -cq:v ${cq} -b:v ${bitrateTarget}k -maxrate:v ${bitrateMax}k -preset slow -multipass fullres -rc-lookahead 32 -spatial_aq:v 1 -aq-strength:v 15 -threads 1 -metadata comment=processed`);
       
-      // Add input decoder settings if specified
-      const decoderSetting = inputDecoderSettings[file.video_codec_name];
-      if (decoderSetting !== undefined && decoderSetting.trim() !== '') {
+      // Add input decoder settings with 10-bit detection for H.264
+      if (stream.codec_name === 'h264') {
+        // Check if video is 10-bit by looking at pixel format or profile
+        const is10bit = stream.pix_fmt && (
+          stream.pix_fmt.includes('10le') || 
+          stream.pix_fmt.includes('10be') ||
+          stream.pix_fmt.includes('p010')
+        ) || (stream.profile && stream.profile.toLowerCase().includes('high 10'));
+        
+        if (is10bit) {
+          // Don't use h264_cuvid for 10-bit content - let FFmpeg use software decoder
+          logger.Add(`Stream ${id} is H.264 10-bit, using software decoder (h264_cuvid doesn't support 10-bit)`);
+        } else {
+          // Use hardware decoder for 8-bit H.264
+          configuration.AddInputSetting('-c:v h264_cuvid');
+          logger.Add(`Stream ${id} is H.264 8-bit, using h264_cuvid hardware decoder`);
+        }
+      } else {
+        // For other codecs, use the predefined decoder settings
+        const decoderSetting = inputDecoderSettings[stream.codec_name];
+        if (decoderSetting !== undefined && decoderSetting.trim() !== '') {
           configuration.AddInputSetting(decoderSetting);
+        }
       }
-      // The specific h264_cuvid logic that caused issues was removed previously.
-      // Now relying on inputDecoderSettings['h264'] = '' for auto-selection.
 
       logger.Add(`Transcoding stream ${id} to HEVC using NVidia NVENC`);
     }
