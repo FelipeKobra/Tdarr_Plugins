@@ -3,7 +3,7 @@
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_Remux',
   Stage: 'Pre-processing',
-  Name: 'FelipeKbra Remux + Web Optimize Check',
+  Name: 'FelipeKbra - Remux + Web Optimize Check',
   Type: 'Video',
   Operation: 'Transcode',
   Description: 'Remuxes to mkv/mp4 and ensures MP4 is "Streamable" (FastStart) for optimized web streaming in Jellyfin/Plex.',

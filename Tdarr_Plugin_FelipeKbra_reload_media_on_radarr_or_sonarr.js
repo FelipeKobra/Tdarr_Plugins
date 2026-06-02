@@ -3,7 +3,7 @@ module.exports.dependencies = [];
 const details = () => ({
     id: 'Tdarr_Plugin_FelipeKbra_reload_media_on_radarr_or_sonarr',
     Stage: 'Post-processing',
-    Name: 'Notify Radarr and/or Sonarr of Media Changes',
+    Name: 'FelipeKbra - Notify Radarr and/or Sonarr of Media Changes',
     Type: 'Video',
     Operation: 'Transcode',
     Description: 'This plugin triggers a library refresh in Radarr or Sonarr after a file has been processed. This ensures the *arr apps see the updated file size/metadata immediately.',

@@ -3,7 +3,7 @@ const details = () => {
   return {
     id: "Tdarr_Plugin_FelipeKbra_RemoveDolbyVision",
     Stage: "Pre-processing",
-    Name: "FelipeKbra Remove Dolby Vision (English Enhanced)",
+    Name: "FelipeKbra - Remove Dolby Vision (English Enhanced)",
     Type: "Video",
     Operation: "Transcode",
     Description: "Identifies Dolby Vision HEVC streams, extracts them, removes DV metadata using dovi_tool (leaving HDR10/base layer), and remuxes back into MKV.",

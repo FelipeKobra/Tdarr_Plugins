@@ -3,7 +3,7 @@ module.exports.dependencies = [];
 const details = () => ({
     id: 'Tdarr_Plugin_FelipeKbra_Tag_Manager',
     Stage: 'Post-processing',
-    Name: 'Radarr/Sonarr Tag Manager - Remove and Add Tags',
+    Name: 'FelipeKbra - Radarr/Sonarr Tag Manager - Remove and Add Tags',
     Type: 'Video',
     Operation: 'Transcode',
     Description: 'Remove uma tag específica de um filme/série e adiciona outra tag no lugar. Útil para gerenciar tags automaticamente após o processamento de arquivos.',

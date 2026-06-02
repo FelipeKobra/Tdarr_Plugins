@@ -3,7 +3,7 @@
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_Keep_Portuguese_Or_Original_Audio',
   Stage: 'Pre-processing',
-  Name: 'Keep Only Portuguese (BR/PT) or Original Language Audio',
+  Name: 'FelipeKbra - Keep Only Portuguese (BR/PT) or Original Language Audio',
   Type: 'Audio',
   Operation: 'Transcode',
   Description: `Este plugin mantém apenas a faixa de áudio em português (brasileiro preferencial, 
