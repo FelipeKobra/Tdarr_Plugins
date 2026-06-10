@@ -1,9 +1,9 @@
 /* eslint-disable */
 // tdarrSkipTest
 const details = () => ({
-  id: 'Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC',
+  id: 'Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC_MP4',
   Stage: 'Pre-processing',
-  Name: 'FelipeKbra - H264/HEVC to NVENC',
+  Name: 'FelipeKbra - H264/HEVC to NVENC Focused on MP4 Containers',
   Type: 'Video',
   Operation: 'Transcode',
   Description:
