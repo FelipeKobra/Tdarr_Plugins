@@ -438,7 +438,21 @@ function buildVideoConfiguration(inputs, file, logger) {
       configuration.AddOutputSetting(`-c:v hevc_nvenc -tag:v hvc1 -profile:v main10 -pix_fmt:v p010le -gpu 0 -surfaces 64 -qmin 0 -cq:v ${cq} -b:v ${bitrateTarget}k -maxrate:v ${bitrateMax}k -preset slow -multipass fullres -rc-lookahead 32 -spatial_aq:v 1 -aq-strength:v 15 -threads 1 -metadata comment=processed`);
       
       // Add input decoder settings if specified
-      const decoderSetting = inputDecoderSettings[file.video_codec_name];
+      let decoderSetting = inputDecoderSettings[file.video_codec_name];
+
+      // Verificação inteligente para H264 de 10 bits
+      if (file.video_codec_name === 'h264') {
+        const bitDepth = stream.bits_per_raw_sample ? parseInt(stream.bits_per_raw_sample, 10) : 8;
+        const is10bit = bitDepth === 10 || (stream.pix_fmt && stream.pix_fmt.includes('10'));
+
+        if (is10bit) {
+          logger.Add(`[AVISO] H264 de 10 bits detectado no stream ${id}. Desativando h264_cuvid para evitar erro da NVIDIA e forçando decodificação por CPU.`);
+          decoderSetting = ''; // Ignora a GPU na entrada, usando a CPU
+        } else {
+          logger.Add(`H264 de 8 bits padrão detectado no stream ${id}. Utilizando decodificação por GPU (Cuvid).`);
+        }
+      }
+
       if (decoderSetting !== undefined && decoderSetting.trim() !== '') {
           configuration.AddInputSetting(decoderSetting);
       }
