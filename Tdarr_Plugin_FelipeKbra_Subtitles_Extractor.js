@@ -5,11 +5,8 @@ const details = () => ({
   Name: 'FelipeKbra - Extract Subtitles and Name It Correctly Based on Brazilian or European Source',
   Type: 'Video',
   Operation: 'Transcode',
-  Description: 'This plugin extracts embedded subs in one pass inside Tdarr and will optionally remove them. \n\n '
-      + 'All processes happen within Tdarr without the use of any exec() functions, which lets the progress bar '
-      + 'report the status correctly. AND all subtitles are extracted in one pass, which is much faster than '
-      + 'other options.',
-  Version: '1.07',
+  Description: 'This plugin extracts embedded subs in one pass inside Tdarr, optionally removes them, and can clean formatting tags.',
+  Version: '1.08',
   Tags: 'pre-processing,subtitle only,ffmpeg,configurable',
   Inputs: [
     {
@@ -23,7 +20,20 @@ const details = () => ({
           'yes',
         ],
       },
-      tooltip: 'Do you want to remove subtitles after they are  extracted?',
+      tooltip: 'Do you want to remove subtitles from the video container after they are extracted?',
+    },
+    {
+      name: 'remove_tags',
+      type: 'string',
+      defaultValue: 'yes',
+      inputUI: {
+        type: 'dropdown',
+        options: [
+          'no',
+          'yes',
+        ],
+      },
+      tooltip: 'Do you want to remove formatting tags (e.g. {\\an8}, <i>, <b>) from the extracted SRT files?',
     },
     {
       name: 'subtitle_codecs',
@@ -45,7 +55,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   const lib = require('../methods/lib')(); const fs = require('fs');
   // eslint-disable-next-line @typescript-eslint/no-unused-vars,no-param-reassign
   inputs = lib.loadDefaultValues(inputs, details);
-  // Must return this object at some point in the function else plugin will fail.
+  
   const response = {
     processFile: true,
     preset: '',
@@ -56,7 +66,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     infoLog: '',
   };
 
-  if (inputs.remove_subs === undefined) {
+  if (inputs.remove_subs === undefined || inputs.remove_tags === undefined) {
     response.processFile = false;
     response.infoLog += '☒ Inputs not entered! \n';
     return response;
@@ -99,7 +109,6 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       if (titleLower.includes('brazilian') || titleLower.includes('br')) {
         lang = 'pt-BR';
       } else {
-        // Se for "European" ou apenas "por" genérico, define como "pt"
         lang = 'pt';
       }
     }
@@ -110,14 +119,11 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     } 
 
     const { originalLibraryFile } = otherArguments;
-
     let subsFile = '';
 
-    // for Tdarr V2 (2.00.05+)
     if (originalLibraryFile && originalLibraryFile.file) {
       subsFile = originalLibraryFile.file;
     } else {
-      // for Tdarr V1
       subsFile = file.file;
     }
     subsFile = subsFile.split('.');
@@ -126,8 +132,24 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     subsFile = subsFile.join('.');
 
     const { index } = subStream;
+    
+    // Se o arquivo já existe (Passada 2)
     if (fs.existsSync(`${subsFile}`)) {
-      response.infoLog += `${lang}${type}.srt already exists. Skipping!\n`;
+      response.infoLog += `${lang}${type}.srt already exists. Skipping extraction.\n`;
+      
+      // Executa a remoção de tags de posicionamento (ASS) e estilos (HTML)
+      if (inputs.remove_tags === 'yes') {
+        try {
+          let content = fs.readFileSync(subsFile, 'utf8');
+          // Regex 1: Remove tags ASS/SSA do tipo {\an8}, {\pos(x,y)}, etc.
+          // Regex 2: Remove tags HTML do tipo <i>, <b>, <font>, etc.
+          const cleaned = content.replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '');
+          fs.writeFileSync(subsFile, cleaned, 'utf8');
+          response.infoLog += `☑ Removed formatting tags from ${lang}${type}.srt\n`;
+        } catch (err) {
+          response.infoLog += `☒ Error removing tags from ${lang}${type}.srt: ${err.message}\n`;
+        }
+      }
     } else if (typeof title === 'string'
     && (title.toLowerCase().includes('commentary')
     || title.toLowerCase().includes('description'))) {
@@ -138,22 +160,33 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
+  // Se o comando não mudou, significa que todas as legendas já foram extraídas (e limpas)
   if (command === '-y <io>') {
-    response.infoLog += 'All subs already extracted!\n';
+    response.infoLog += 'All subs already extracted and processed!\n';
     if (inputs.remove_subs === 'no') {
       response.processFile = false;
       return response;
     }
+    // Se remove_subs for 'yes', agora que as legendas externas estão seguras e limpas, removemos do container
+    response.preset = command + ' -map 0 -map -0:s -c copy';
+    response.reQueueAfter = false;
+    return response;
   }
 
   response.preset = command;
 
-  if (inputs.remove_subs === 'yes') {
-    response.preset += ' -map 0 -map -0:s -c copy';
-  }
-
-  if (inputs.remove_subs === 'no') {
+  // Gerenciamento de filas para a Passada 1
+  if (inputs.remove_tags === 'yes') {
+    // Força o Tdarr a voltar neste plugin após o FFmpeg criar os arquivos
+    response.reQueueAfter = true;
+    // Mantém as legendas no mkv por enquanto para que a Passada 2 saiba mapear os nomes certos
     response.preset += ' -map 0 -c copy';
+  } else {
+    if (inputs.remove_subs === 'yes') {
+      response.preset += ' -map 0 -map -0:s -c copy';
+    } else {
+      response.preset += ' -map 0 -c copy';
+    }
   }
 
   return response;
