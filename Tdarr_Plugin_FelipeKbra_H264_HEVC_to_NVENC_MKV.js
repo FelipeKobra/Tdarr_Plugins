@@ -1,7 +1,7 @@
 /* eslint-disable */
 // tdarrSkipTest
 const details = () => ({
-  id: 'Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC',
+  id: 'Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC_MKV',
   Stage: 'Pre-processing',
   Name: 'FelipeKbra - H264/HEVC to NVENC Focused on MKV Containers (Pure CUDA Opt)',
   Type: 'Video',
@@ -73,48 +73,56 @@ const details = () => ({
       type: 'number',
       defaultValue: 2000,
       inputUI: { type: 'text' },
+      tooltip: 'HEVC bitrate threshold in kilobits for 480p/576p files. Files below this value will be skipped.',
     },
     {
       name: 'hevc_720p_filter_bitrate',
       type: 'number',
       defaultValue: 3000,
       inputUI: { type: 'text' },
+      tooltip: 'HEVC bitrate threshold in kilobits for 720p files. Files below this value will be skipped.',
     },
     {
       name: 'hevc_1080p_filter_bitrate',
       type: 'number',
       defaultValue: 4000,
       inputUI: { type: 'text' },
+      tooltip: 'HEVC bitrate threshold in kilobits for 1080p files. Files below this value will be skipped.',
     },
     {
       name: 'hevc_filter_bitrate_4KUHD',
       type: 'number',
       defaultValue: 8000,
       inputUI: { type: 'text' },
+      tooltip: 'HEVC bitrate threshold in kilobits for 4KUHD files. Files below this value will be skipped.',
     },
     {
       name: 'tagName',
       type: 'string',
       defaultValue: 'COPYRIGHT',
       inputUI: { type: 'text' },
+      tooltip: 'Name of the metadata tag to check/apply to prevent processing loops (e.g., COPYRIGHT).',
     },
     {
       name: 'tagValues',
       type: 'string',
       defaultValue: 'processed',
       inputUI: { type: 'text' },
+      tooltip: 'Comma-separated values for the metadata tag to check (e.g., processed).',
     },
     {
       name: 'exactMatch',
       type: 'boolean',
       defaultValue: true,
       inputUI: { type: 'dropdown', options: ['false', 'true'] },
+      tooltip: 'Whether the metadata tag value must match exactly or just be contained within the tag.',
     },
     {
       name: 'continueIfTagFound',
       type: 'boolean',
       defaultValue: false,
       inputUI: { type: 'dropdown', options: ['false', 'true'] },
+      tooltip: 'If true, processing will continue even if the specified metadata tag value is already found.',
     },
   ],
 });
@@ -246,8 +254,6 @@ function buildVideoConfiguration(inputs, file, logger) {
       const bitrateMax = bitrateTarget + tier.max_increase;
       const { cq } = tier;
 
-      // AJUSTE 1: Adicionado "passthrough=0" ao scale_cuda para garantir proteção contra distorções em arquivos com crop
-      // Mantido o "-multipass fullres" conforme solicitado
       configuration.AddOutputSetting(`-c:v hevc_nvenc -tag:v hvc1 -profile:v main10 -vf "scale_cuda=format=p010le:passthrough=0" -gpu 0 -surfaces 64 -qmin 0 -cq:v ${cq} -b:v ${bitrateTarget}k -maxrate:v ${bitrateMax}k -preset slow -multipass fullres -rc-lookahead 32 -spatial_aq:v 1 -aq-strength:v 15 -threads 1 -metadata:s:v:0 COPYRIGHT=processed`);
       
       let decoderSetting = inputDecoderSettings[file.video_codec_name];

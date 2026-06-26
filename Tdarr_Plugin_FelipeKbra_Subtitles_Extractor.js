@@ -1,3 +1,4 @@
+/* eslint-disable */
 // tdarrSkipTest
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_Subtitles_Extractor',
@@ -66,12 +67,14 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     infoLog: '',
   };
 
+  // Guard clause against unassigned properties
   if (inputs.remove_subs === undefined || inputs.remove_tags === undefined) {
     response.processFile = false;
     response.infoLog += '☒ Inputs not entered! \n';
     return response;
   }
 
+  // Parse comma-separated list of target subtitle codecs
   const subtitleCodecs = String(inputs.subtitle_codecs).toLowerCase().split(',')
     .map((codec) => codec.trim())
     .filter((codec) => codec !== '');
@@ -101,7 +104,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       title = subStream.tags.title;
     }
 
-    // --- NOVA LÓGICA PARA IDENTIFICAÇÃO DE PT E PT-BR ---
+    // -------------------------------------------------------------------------
+    // PT AND PT-BR IDENTIFICATION LOGIC
+    // -------------------------------------------------------------------------
     const langLower = lang.toLowerCase();
     const titleLower = title.toLowerCase();
     
@@ -112,8 +117,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
         lang = 'pt';
       }
     }
-    // ----------------------------------------------------
+    // -------------------------------------------------------------------------
 
+    // Append flag if track is designated for the hearing impaired (SDH)
     if (subStream?.disposition?.hearing_impaired) {
       type = '.sdh';
     } 
@@ -126,6 +132,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     } else {
       subsFile = file.file;
     }
+    
+    // Construct the destination external subtitle filepath structure
     subsFile = subsFile.split('.');
     subsFile[subsFile.length - 2] += `.${lang}${type}`;
     subsFile[subsFile.length - 1] = 'srt';
@@ -133,16 +141,16 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
 
     const { index } = subStream;
     
-    // Se o arquivo já existe (Passada 2)
+    // Executed on Pass 2 if the external file structure already exists on disk
     if (fs.existsSync(`${subsFile}`)) {
       response.infoLog += `${lang}${type}.srt already exists. Skipping extraction.\n`;
       
-      // Executa a remoção de tags de posicionamento (ASS) e estilos (HTML)
+      // Execute regex operations to purge ASS positioning metadata and standard HTML styling syntax
       if (inputs.remove_tags === 'yes') {
         try {
           let content = fs.readFileSync(subsFile, 'utf8');
-          // Regex 1: Remove tags ASS/SSA do tipo {\an8}, {\pos(x,y)}, etc.
-          // Regex 2: Remove tags HTML do tipo <i>, <b>, <font>, etc.
+          // Regex 1: Removes ASS/SSA positioning headers such as {\an8}, {\pos(x,y)}, etc.
+          // Regex 2: Removes traditional markup tags like <i>, <b>, <font>, etc.
           const cleaned = content.replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '');
           fs.writeFileSync(subsFile, cleaned, 'utf8');
           response.infoLog += `☑ Removed formatting tags from ${lang}${type}.srt\n`;
@@ -160,14 +168,14 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
-  // Se o comando não mudou, significa que todas as legendas já foram extraídas (e limpas)
+  // If the command template string is untouched, extraction and cleanup routines are finished
   if (command === '-y <io>') {
     response.infoLog += 'All subs already extracted and processed!\n';
     if (inputs.remove_subs === 'no') {
       response.processFile = false;
       return response;
     }
-    // Se remove_subs for 'yes', agora que as legendas externas estão seguras e limpas, removemos do container
+    // Now that external subtitle safety layers are verified, purge them from the primary mux container
     response.preset = command + ' -map 0 -map -0:s -c copy';
     response.reQueueAfter = false;
     return response;
@@ -175,11 +183,11 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
 
   response.preset = command;
 
-  // Gerenciamento de filas para a Passada 1
+  // Queue workflow coordination mechanics for Pass 1 initialization
   if (inputs.remove_tags === 'yes') {
-    // Força o Tdarr a voltar neste plugin após o FFmpeg criar os arquivos
+    // Force the Tdarr engine to process this plugin a second time once FFmpeg finishes operations
     response.reQueueAfter = true;
-    // Mantém as legendas no mkv por enquanto para que a Passada 2 saiba mapear os nomes certos
+    // Retain internal tracks temporarily so Pass 2 mapping coordinates resolve filenames safely
     response.preset += ' -map 0 -c copy';
   } else {
     if (inputs.remove_subs === 'yes') {

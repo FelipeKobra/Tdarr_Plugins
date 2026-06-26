@@ -60,7 +60,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     return response;
   }
 
-  // Check if file is video
+  // Check if file is a valid video medium
   if (file.fileMedium !== 'video') {
     response.infoLog += '☒ Info: File is not a video. Skipping. \n';
     return response;
@@ -73,10 +73,12 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   let inputArguments = '';
   let needsProcessing = false;
 
+  // -------------------------------------------------------------------------
   // 1. WEB OPTIMIZATION CHECK (FastStart)
+  // -------------------------------------------------------------------------
   let currentIsStreamable = 'Yes';
   if (file.mediaInfo && file.mediaInfo.track && file.mediaInfo.track[0]) {
-    // MediaInfo returns IsStreamable "No" if the Moov Atom is at the end of the file
+    // MediaInfo returns IsStreamable "No" if the Moov Atom is located at the end of the file binary
     currentIsStreamable = file.mediaInfo.track[0].IsStreamable || 'Yes';
   }
 
@@ -85,25 +87,30 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     needsProcessing = true;
   }
 
+  // -------------------------------------------------------------------------
   // 2. CONTAINER CHECK
+  // -------------------------------------------------------------------------
   if (file.container !== inputs.container) {
     response.infoLog += `☒ Info: Current container is ${file.container}, requested ${inputs.container}. \n`;
     needsProcessing = true;
   }
 
+  // -------------------------------------------------------------------------
   // 3. CONFORMITY LOGIC (force_conform)
+  // -------------------------------------------------------------------------
   const forceConform = String(inputs.force_conform) === 'true';
 
   if (forceConform) {
     response.infoLog += '⚙ Info: Force Conform is enabled. Checking for incompatible streams... \n';
     
     if (isMkvOutput) {
-      // Remove Data streams for MKV
+      // Remove generic Data tracks entirely for native MKV safety layout compliance
       extraArguments += '-map -0:d ';
       for (let i = 0; i < file.ffProbeData.streams.length; i++) {
         const codec = (file.ffProbeData.streams[i].codec_name || '').toLowerCase();
         if (['mov_text', 'eia_608', 'timed_id3'].includes(codec)) {
           response.infoLog += `  - Removing incompatible MKV stream [${i}]: ${codec} \n`;
+          // Append negative stream mappings to explicitly strip the track
           extraArguments += `-map -0:${i} `;
           needsProcessing = true;
         }
@@ -111,11 +118,12 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
 
     if (isMp4Output) {
-      // Remove incompatible subtitle/data types for MP4
+      // Remove incompatible subtitle, captions, or timed telemetry data types from MP4 specification structures
       for (let i = 0; i < file.ffProbeData.streams.length; i++) {
         const codec = (file.ffProbeData.streams[i].codec_name || '').toLowerCase();
         if (['hdmv_pgs_subtitle', 'eia_608', 'subrip', 'timed_id3'].includes(codec)) {
           response.infoLog += `  - Removing incompatible MP4 stream [${i}]: ${codec} \n`;
+          // Append negative stream mappings to explicitly strip the track
           extraArguments += `-map -0:${i} `;
           needsProcessing = true;
         }
@@ -123,24 +131,28 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
-  // 4. PRE-FFMPEG FLAGS (Fixing timestamps for specific formats)
+  // -------------------------------------------------------------------------
+  // 4. PRE-FFMPEG FLAGS (Fixing timestamps for legacy formats)
+  // -------------------------------------------------------------------------
   const legacyContainers = ['ts', 'avi', 'mpg', 'mpeg', 'vob'];
   if (legacyContainers.includes(file.container.toLowerCase())) {
-    response.infoLog += '⚙ Info: Legacy container detected. Adding +genpts flag to fix timestamps. \n';
+    response.infoLog += '⚙ Info: Legacy container detected. Adding +genpts flag to fix missing or broken timestamps. \n';
     inputArguments = '-fflags +genpts';
   }
 
-  // FINAL DECISION
+  // -------------------------------------------------------------------------
+  // FINAL DECISION AND PRESET ASSEMBLY
+  // -------------------------------------------------------------------------
   if (!needsProcessing) {
     response.infoLog += `☑ Success: File is already in ${inputs.container} and optimized for web. No action needed. \n`;
     return response;
   }
 
-  // Setting the preset
-  // We use -map 0 to include everything, then negative maps in extraArguments to exclude specific streams
+  // We use -map 0 to match all tracks by default, then negative maps in extraArguments override and exclude targets
   let outputFlags = `-map 0 -c copy -max_muxing_queue_size 9999 ${extraArguments}`;
   
   if (isMp4Output) {
+    // Relocate the moov atom header structure to the front of the output stream file block
     outputFlags += ' -movflags +faststart';
     response.infoLog += '⚙ Info: Applying +faststart for MP4 streaming compatibility. \n';
   }

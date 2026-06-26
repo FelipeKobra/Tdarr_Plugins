@@ -1,3 +1,4 @@
+/* eslint-disable */
 module.exports.dependencies = [];
 
 const details = () => ({
@@ -69,21 +70,28 @@ const details = () => ({
     ],
 });
 
-// Helper function using native http/https modules
+/**
+ * Helper function using native node HTTP/HTTPS modules to run requests asynchronously
+ * Avoids dependencies on external third-party request libraries like axios or fetch.
+ */
 const makeRequest = (url, options, postData = null, mylog) => {
     return new Promise((resolve, reject) => {
+        // Dynamically select protocol module depending on target schema
         const lib = url.startsWith('https') ? require('https') : require('http');
         
         mylog.push(`[Request] Calling: ${url}`);
         
         const req = lib.request(url, options, (res) => {
             let data = '';
+            // Aggregate incoming data buffers
             res.on('data', (chunk) => { data += chunk; });
             res.on('end', () => {
                 try {
+                    // Attempt to output clean JSON object if valid
                     const parsedData = JSON.parse(data);
                     resolve({ status: res.statusCode, data: parsedData });
                 } catch (e) {
+                    // Fall back to plain text payload on parsing failure
                     resolve({ status: res.statusCode, data: data });
                 }
             });
@@ -94,6 +102,7 @@ const makeRequest = (url, options, postData = null, mylog) => {
             reject(err);
         });
 
+        // If a request payload exists, serialize it and write to socket stream
         if (postData) {
             req.write(JSON.stringify(postData));
         }
@@ -102,6 +111,7 @@ const makeRequest = (url, options, postData = null, mylog) => {
     });
 };
 
+// Core entrypoint orchestration method for post-processing execution
 const plugin = async (file, librarySettings, inputs, otherArguments) => {
     const lib = require('../methods/lib')();
     inputs = lib.loadDefaultValues(inputs, details);
@@ -112,11 +122,12 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
         infoLog: ''
     };
 
+    // Sanitize and format filename parameters to satisfy URI compliance standard rules
     const fileNameEncoded = encodeURIComponent(file.meta.FileName);
 
-    // ---
+    // -------------------------------------------------------------------------
     // RADARR LOGIC
-    // ---
+    // -------------------------------------------------------------------------
     if (String(inputs.radarr_enabled) === 'true') {
         mylog.push('--- Radarr Task Started ---');
         const baseUrl = `http://${inputs.radarr_server}:${inputs.radarr_port}/api/v3`;
@@ -124,6 +135,7 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
         const postUrl = `${baseUrl}/command?apikey=${inputs.radarr_api_key}`;
 
         try {
+            // STEP 1: Query Radarr to find out which database movie tracking entity matches this filename
             const radarrResp = await makeRequest(srchUrl, { method: 'GET' }, null, mylog);
             
             if (radarrResp.status === 200 && radarrResp.data && radarrResp.data.movie) {
@@ -131,6 +143,7 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
                 const movieTitle = radarrResp.data.movie.title;
                 mylog.push(`[Radarr] Found Match: "${movieTitle}" (ID: ${movieId})`);
 
+                // STEP 2: Issue payload targeting the specified ID to trigger file rescans and updates
                 const postData = { name: 'RefreshMovie', movieIds: [movieId] };
                 const postOptions = {
                     method: 'POST',
@@ -150,9 +163,9 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
         }
     }
 
-    // ---
+    // -------------------------------------------------------------------------
     // SONARR LOGIC
-    // ---
+    // -------------------------------------------------------------------------
     if (String(inputs.sonarr_enabled) === 'true') {
         mylog.push('--- Sonarr Task Started ---');
         const baseUrl = `http://${inputs.sonarr_server}:${inputs.sonarr_port}/api/v3`;
@@ -160,6 +173,7 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
         const postUrl = `${baseUrl}/command?apikey=${inputs.sonarr_api_key}`;
 
         try {
+            // STEP 1: Query Sonarr parsing endpoint to extract the respective tracking series metadata mapping
             const sonarrResp = await makeRequest(srchUrl, { method: 'GET' }, null, mylog);
             
             if (sonarrResp.status === 200 && sonarrResp.data && sonarrResp.data.series) {
@@ -167,6 +181,7 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
                 const seriesTitle = sonarrResp.data.series.title;
                 mylog.push(`[Sonarr] Found Match: "${seriesTitle}" (ID: ${seriesId})`);
 
+                // STEP 2: Construct request arguments targeting the specific series layout path structure
                 const postData = { name: 'RefreshSeries', seriesId: seriesId };
                 const postOptions = {
                     method: 'POST',
@@ -186,6 +201,7 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
         }
     }
 
+    // Safety fallback warning log trace if execution parameters were entirely blank
     if (!mylog.length) mylog.push('Both Radarr and Sonarr are disabled in plugin settings.');
 
     response.infoLog = mylog.join('\n');

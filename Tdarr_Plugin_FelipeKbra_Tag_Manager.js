@@ -1,3 +1,4 @@
+/* eslint-disable */
 module.exports.dependencies = [];
 
 const details = () => ({
@@ -6,7 +7,7 @@ const details = () => ({
     Name: 'FelipeKbra - Radarr/Sonarr Tag Manager - Remove and Add Tags',
     Type: 'Video',
     Operation: 'Transcode',
-    Description: 'Remove uma tag específica de um filme/série e adiciona outra tag no lugar. Útil para gerenciar tags automaticamente após o processamento de arquivos.',
+    Description: 'Removes a specific tag from a movie/series and adds another tag in its place. Useful for automatically managing tags after file processing.',
     Version: '1.0.0',
     Tags: '3rd party,post-processing,configurable,radarr,sonarr,tags',
     Inputs: [
@@ -15,89 +16,91 @@ const details = () => ({
             type: 'boolean',
             defaultValue: false,
             inputUI: { type: 'dropdown', options: ['false', 'true'] },
-            tooltip: 'Ativar gerenciamento de tags no Radarr (Filmes)',
+            tooltip: 'Enable tag management in Radarr (Movies)',
         },
         {
             name: 'radarr_server',
             type: 'string',
             defaultValue: '192.168.1.100',
             inputUI: { type: 'text' },
-            tooltip: 'IP ou Hostname do Radarr',
+            tooltip: 'Radarr IP or Hostname',
         },
         {
             name: 'radarr_port',
             type: 'string',
             defaultValue: '7878',
             inputUI: { type: 'text' },
-            tooltip: 'Porta do Radarr (Padrão: 7878)',
+            tooltip: 'Radarr Port (Default: 7878)',
         },
         {
             name: 'radarr_api_key',
             type: 'string',
             defaultValue: '',
             inputUI: { type: 'text' },
-            tooltip: 'Chave de API do Radarr',
+            tooltip: 'Your Radarr API Key',
         },
         {
             name: 'radarr_tag_to_remove',
             type: 'string',
             defaultValue: 'not-transcoded',
             inputUI: { type: 'text' },
-            tooltip: 'Nome da tag a ser removida no Radarr (deixe vazio para não remover nenhuma)',
+            tooltip: 'Name of the tag to be removed in Radarr (leave empty to not remove any)',
         },
         {
             name: 'radarr_tag_to_add',
             type: 'string',
             defaultValue: 'transcoded',
             inputUI: { type: 'text' },
-            tooltip: 'Nome da tag a ser adicionada no Radarr (deixe vazio para não adicionar nenhuma)',
+            tooltip: 'Name of the tag to be added in Radarr (leave empty to not add any)',
         },
         {
             name: 'sonarr_enabled',
             type: 'boolean',
             defaultValue: false,
             inputUI: { type: 'dropdown', options: ['false', 'true'] },
-            tooltip: 'Ativar gerenciamento de tags no Sonarr (Séries)',
+            tooltip: 'Enable tag management in Sonarr (TV Shows)',
         },
         {
             name: 'sonarr_server',
             type: 'string',
             defaultValue: '192.168.1.100',
             inputUI: { type: 'text' },
-            tooltip: 'IP ou Hostname do Sonarr',
+            tooltip: 'Sonarr IP or Hostname',
         },
         {
             name: 'sonarr_port',
             type: 'string',
             defaultValue: '8989',
             inputUI: { type: 'text' },
-            tooltip: 'Porta do Sonarr (Padrão: 8989)',
+            tooltip: 'Sonarr Port (Default: 8989)',
         },
         {
             name: 'sonarr_api_key',
             type: 'string',
             defaultValue: '',
             inputUI: { type: 'text' },
-            tooltip: 'Chave de API do Sonarr',
+            tooltip: 'Your Sonarr API Key',
         },
         {
             name: 'sonarr_tag_to_remove',
             type: 'string',
             defaultValue: 'not-transcoded',
             inputUI: { type: 'text' },
-            tooltip: 'Nome da tag a ser removida no Sonarr (deixe vazio para não remover nenhuma)',
+            tooltip: 'Name of the tag to be removed in Sonarr (leave empty to not remove any)',
         },
         {
             name: 'sonarr_tag_to_add',
             type: 'string',
             defaultValue: 'transcoded',
             inputUI: { type: 'text' },
-            tooltip: 'Nome da tag a ser adicionada no Sonarr (deixe vazio para não adicionar nenhuma)',
+            tooltip: 'Name of the tag to be added in Sonarr (leave empty to not add any)',
         },
     ],
 });
 
-// Helper function para fazer requisições HTTP/HTTPS nativas
+/**
+ * Helper function using native Node.js HTTP/HTTPS modules to execute asynchronous networking
+ */
 const makeRequest = (url, options, postData = null, mylog) => {
     return new Promise((resolve, reject) => {
         const lib = url.startsWith('https') ? require('https') : require('http');
@@ -130,27 +133,28 @@ const makeRequest = (url, options, postData = null, mylog) => {
     });
 };
 
-// Função para criar uma nova tag se não existir
+/**
+ * Validates existence of a tag name, and automatically creates it if missing
+ */
 const ensureTagExists = async (baseUrl, apiKey, tagName, mylog) => {
     const tagsUrl = `${baseUrl}/tag?apikey=${apiKey}`;
     
     try {
-        // Buscar todas as tags existentes
+        // Fetch all current tags inside the application database
         const tagsResp = await makeRequest(tagsUrl, { method: 'GET' }, null, mylog);
         
         if (tagsResp.status === 200 && Array.isArray(tagsResp.data)) {
-            // Procurar pela tag com o nome especificado
             const existingTag = tagsResp.data.find(t => 
                 t.label && t.label.toLowerCase() === tagName.toLowerCase()
             );
             
             if (existingTag) {
-                mylog.push(`[Tag] Tag "${tagName}" encontrada (ID: ${existingTag.id})`);
+                mylog.push(`[Tag] Tag "${tagName}" found (ID: ${existingTag.id})`);
                 return existingTag.id;
             }
             
-            // Tag não existe, criar nova
-            mylog.push(`[Tag] Tag "${tagName}" não existe, criando...`);
+            // Tag does not exist, initialize a creation request payload
+            mylog.push(`[Tag] Tag "${tagName}" does not exist, creating...`);
             const postOptions = {
                 method: 'POST',
                 headers: {
@@ -162,22 +166,24 @@ const ensureTagExists = async (baseUrl, apiKey, tagName, mylog) => {
             const createResp = await makeRequest(tagsUrl, postOptions, newTagData, mylog);
             
             if (createResp.status === 200 || createResp.status === 201) {
-                mylog.push(`[Tag] Tag "${tagName}" criada (ID: ${createResp.data.id})`);
+                mylog.push(`[Tag] Tag "${tagName}" created successfully (ID: ${createResp.data.id})`);
                 return createResp.data.id;
             } else {
-                mylog.push(`[Tag] Erro ao criar tag "${tagName}". Status: ${createResp.status}`);
+                mylog.push(`[Tag] Error creating tag "${tagName}". Status: ${createResp.status}`);
                 return null;
             }
         }
     } catch (error) {
-        mylog.push(`[Tag] Erro ao processar tags: ${error.message}`);
+        mylog.push(`[Tag] Error processing tags lifecycle: ${error.message}`);
         return null;
     }
     
     return null;
 };
 
-// Função para encontrar ID de uma tag pelo nome
+/**
+ * Searches for a tag's unique integer ID matching a plaintext string label name
+ */
 const findTagIdByName = async (baseUrl, apiKey, tagName, mylog) => {
     const tagsUrl = `${baseUrl}/tag?apikey=${apiKey}`;
     
@@ -190,57 +196,59 @@ const findTagIdByName = async (baseUrl, apiKey, tagName, mylog) => {
             );
             
             if (tag) {
-                mylog.push(`[Tag] Tag "${tagName}" encontrada (ID: ${tag.id})`);
+                mylog.push(`[Tag] Tag "${tagName}" found (ID: ${tag.id})`);
                 return tag.id;
             } else {
-                mylog.push(`[Tag] Tag "${tagName}" não encontrada`);
+                mylog.push(`[Tag] Tag "${tagName}" not found`);
                 return null;
             }
         }
     } catch (error) {
-        mylog.push(`[Tag] Erro ao buscar tag: ${error.message}`);
+        mylog.push(`[Tag] Error searching for tag: ${error.message}`);
         return null;
     }
     
     return null;
 };
 
-// Função para processar tags de um filme (Radarr)
+/**
+ * Orchestrates Radarr specific media track parsing and tag adjustments
+ */
 const processRadarrTags = async (inputs, fileNameEncoded, mylog) => {
-    mylog.push('--- Processamento de Tags do Radarr Iniciado ---');
+    mylog.push('--- Radarr Tag Management Processing Started ---');
     
     const baseUrl = `http://${inputs.radarr_server}:${inputs.radarr_port}/api/v3`;
     const srchUrl = `${baseUrl}/parse?apikey=${inputs.radarr_api_key}&title=${fileNameEncoded}`;
     
     try {
-        // 1. Procurar o filme pelo nome do arquivo
+        // 1. Resolve which specific Movie payload maps to this active filename
         const parseResp = await makeRequest(srchUrl, { method: 'GET' }, null, mylog);
         
         if (parseResp.status !== 200 || !parseResp.data || !parseResp.data.movie) {
-            mylog.push('[Radarr] Filme não encontrado para este arquivo');
+            mylog.push('[Radarr] No matching movie entry found for this filename');
             return;
         }
         
         const movieId = parseResp.data.movie.id;
         const movieTitle = parseResp.data.movie.title;
-        mylog.push(`[Radarr] Filme encontrado: "${movieTitle}" (ID: ${movieId})`);
+        mylog.push(`[Radarr] Movie found: "${movieTitle}" (ID: ${movieId})`);
         
-        // 2. Obter detalhes completos do filme
+        // 2. Extract full database object configurations for this targeted movie entity
         const movieUrl = `${baseUrl}/movie/${movieId}?apikey=${inputs.radarr_api_key}`;
         const movieResp = await makeRequest(movieUrl, { method: 'GET' }, null, mylog);
         
         if (movieResp.status !== 200 || !movieResp.data) {
-            mylog.push('[Radarr] Erro ao obter detalhes do filme');
+            mylog.push('[Radarr] Failed to fetch existing movie details metadata');
             return;
         }
         
         const movie = movieResp.data;
         let currentTags = movie.tags || [];
-        mylog.push(`[Radarr] Tags atuais: [${currentTags.join(', ')}]`);
+        mylog.push(`[Radarr] Current mapped tag IDs: [${currentTags.join(', ')}]`);
         
         let tagsModified = false;
         
-        // 3. Remover tag se especificada
+        // 3. Evaluate and discard unwanted target tag definitions
         if (inputs.radarr_tag_to_remove && inputs.radarr_tag_to_remove.trim()) {
             const tagToRemoveId = await findTagIdByName(
                 baseUrl, 
@@ -253,15 +261,15 @@ const processRadarrTags = async (inputs, fileNameEncoded, mylog) => {
                 const index = currentTags.indexOf(tagToRemoveId);
                 if (index > -1) {
                     currentTags.splice(index, 1);
-                    mylog.push(`[Radarr] Tag "${inputs.radarr_tag_to_remove}" removida`);
+                    mylog.push(`[Radarr] Tag "${inputs.radarr_tag_to_remove}" removed successfully`);
                     tagsModified = true;
                 } else {
-                    mylog.push(`[Radarr] Filme não possui a tag "${inputs.radarr_tag_to_remove}"`);
+                    mylog.push(`[Radarr] Movie does not possess target tag: "${inputs.radarr_tag_to_remove}"`);
                 }
             }
         }
         
-        // 4. Adicionar tag se especificada
+        // 4. Evaluate and inject requested tag definitions
         if (inputs.radarr_tag_to_add && inputs.radarr_tag_to_add.trim()) {
             const tagToAddId = await ensureTagExists(
                 baseUrl, 
@@ -273,15 +281,15 @@ const processRadarrTags = async (inputs, fileNameEncoded, mylog) => {
             if (tagToAddId !== null) {
                 if (!currentTags.includes(tagToAddId)) {
                     currentTags.push(tagToAddId);
-                    mylog.push(`[Radarr] Tag "${inputs.radarr_tag_to_add}" adicionada`);
+                    mylog.push(`[Radarr] Tag "${inputs.radarr_tag_to_add}" added successfully`);
                     tagsModified = true;
                 } else {
-                    mylog.push(`[Radarr] Filme já possui a tag "${inputs.radarr_tag_to_add}"`);
+                    mylog.push(`[Radarr] Movie already possesses target tag: "${inputs.radarr_tag_to_add}"`);
                 }
             }
         }
         
-        // 5. Atualizar filme se as tags foram modificadas
+        // 5. Mux the mutated array variables back into the remote application database
         if (tagsModified) {
             movie.tags = currentTags;
             
@@ -295,55 +303,57 @@ const processRadarrTags = async (inputs, fileNameEncoded, mylog) => {
             const updateResp = await makeRequest(movieUrl, putOptions, movie, mylog);
             
             if (updateResp.status === 200 || updateResp.status === 202) {
-                mylog.push(`[Radarr] Tags atualizadas com sucesso: [${currentTags.join(', ')}]`);
+                mylog.push(`[Radarr] Tags updated successfully. Current array: [${currentTags.join(', ')}]`);
             } else {
-                mylog.push(`[Radarr] Erro ao atualizar tags. Status: ${updateResp.status}`);
+                mylog.push(`[Radarr] Failed to write updated tags back to endpoint. Status: ${updateResp.status}`);
             }
         } else {
-            mylog.push('[Radarr] Nenhuma modificação de tag necessária');
+            mylog.push('[Radarr] No tag modification actions needed');
         }
         
     } catch (error) {
-        mylog.push(`[Radarr] Erro durante processamento: ${error.message}`);
+        mylog.push(`[Radarr] Critical exception encountered during processing: ${error.message}`);
     }
 };
 
-// Função para processar tags de uma série (Sonarr)
+/**
+ * Orchestrates Sonarr specific show track parsing and tag adjustments
+ */
 const processSonarrTags = async (inputs, fileNameEncoded, mylog) => {
-    mylog.push('--- Processamento de Tags do Sonarr Iniciado ---');
+    mylog.push('--- Sonarr Tag Management Processing Started ---');
     
     const baseUrl = `http://${inputs.sonarr_server}:${inputs.sonarr_port}/api/v3`;
     const srchUrl = `${baseUrl}/parse?apikey=${inputs.sonarr_api_key}&title=${fileNameEncoded}`;
     
     try {
-        // 1. Procurar a série pelo nome do arquivo
+        // 1. Resolve which specific Series payload maps to this active filename
         const parseResp = await makeRequest(srchUrl, { method: 'GET' }, null, mylog);
         
         if (parseResp.status !== 200 || !parseResp.data || !parseResp.data.series) {
-            mylog.push('[Sonarr] Série não encontrada para este arquivo');
+            mylog.push('[Sonarr] No matching series entry found for this filename');
             return;
         }
         
         const seriesId = parseResp.data.series.id;
         const seriesTitle = parseResp.data.series.title;
-        mylog.push(`[Sonarr] Série encontrada: "${seriesTitle}" (ID: ${seriesId})`);
+        mylog.push(`[Sonarr] Series found: "${seriesTitle}" (ID: ${seriesId})`);
         
-        // 2. Obter detalhes completos da série
+        // 2. Extract full database object configurations for this targeted series entity
         const seriesUrl = `${baseUrl}/series/${seriesId}?apikey=${inputs.sonarr_api_key}`;
         const seriesResp = await makeRequest(seriesUrl, { method: 'GET' }, null, mylog);
         
         if (seriesResp.status !== 200 || !seriesResp.data) {
-            mylog.push('[Sonarr] Erro ao obter detalhes da série');
+            mylog.push('[Sonarr] Failed to fetch existing series details metadata');
             return;
         }
         
         const series = seriesResp.data;
         let currentTags = series.tags || [];
-        mylog.push(`[Sonarr] Tags atuais: [${currentTags.join(', ')}]`);
+        mylog.push(`[Sonarr] Current mapped tag IDs: [${currentTags.join(', ')}]`);
         
         let tagsModified = false;
         
-        // 3. Remover tag se especificada
+        // 3. Evaluate and discard unwanted target tag definitions
         if (inputs.sonarr_tag_to_remove && inputs.sonarr_tag_to_remove.trim()) {
             const tagToRemoveId = await findTagIdByName(
                 baseUrl, 
@@ -356,15 +366,15 @@ const processSonarrTags = async (inputs, fileNameEncoded, mylog) => {
                 const index = currentTags.indexOf(tagToRemoveId);
                 if (index > -1) {
                     currentTags.splice(index, 1);
-                    mylog.push(`[Sonarr] Tag "${inputs.sonarr_tag_to_remove}" removida`);
+                    mylog.push(`[Sonarr] Tag "${inputs.sonarr_tag_to_remove}" removed successfully`);
                     tagsModified = true;
                 } else {
-                    mylog.push(`[Sonarr] Série não possui a tag "${inputs.sonarr_tag_to_remove}"`);
+                    mylog.push(`[Sonarr] Series does not possess target tag: "${inputs.sonarr_tag_to_remove}"`);
                 }
             }
         }
         
-        // 4. Adicionar tag se especificada
+        // 4. Evaluate and inject requested tag definitions
         if (inputs.sonarr_tag_to_add && inputs.sonarr_tag_to_add.trim()) {
             const tagToAddId = await ensureTagExists(
                 baseUrl, 
@@ -376,15 +386,15 @@ const processSonarrTags = async (inputs, fileNameEncoded, mylog) => {
             if (tagToAddId !== null) {
                 if (!currentTags.includes(tagToAddId)) {
                     currentTags.push(tagToAddId);
-                    mylog.push(`[Sonarr] Tag "${inputs.sonarr_tag_to_add}" adicionada`);
+                    mylog.push(`[Sonarr] Tag "${inputs.sonarr_tag_to_add}" added successfully`);
                     tagsModified = true;
                 } else {
-                    mylog.push(`[Sonarr] Série já possui a tag "${inputs.sonarr_tag_to_add}"`);
+                    mylog.push(`[Sonarr] Series already possesses target tag: "${inputs.sonarr_tag_to_add}"`);
                 }
             }
         }
         
-        // 5. Atualizar série se as tags foram modificadas
+        // 5. Mux the mutated array variables back into the remote application database
         if (tagsModified) {
             series.tags = currentTags;
             
@@ -398,16 +408,16 @@ const processSonarrTags = async (inputs, fileNameEncoded, mylog) => {
             const updateResp = await makeRequest(seriesUrl, putOptions, series, mylog);
             
             if (updateResp.status === 200 || updateResp.status === 202) {
-                mylog.push(`[Sonarr] Tags atualizadas com sucesso: [${currentTags.join(', ')}]`);
+                mylog.push(`[Sonarr] Tags updated successfully. Current array: [${currentTags.join(', ')}]`);
             } else {
-                mylog.push(`[Sonarr] Erro ao atualizar tags. Status: ${updateResp.status}`);
+                mylog.push(`[Sonarr] Failed to write updated tags back to endpoint. Status: ${updateResp.status}`);
             }
         } else {
-            mylog.push('[Sonarr] Nenhuma modificação de tag necessária');
+            mylog.push('[Sonarr] No tag modification actions needed');
         }
         
     } catch (error) {
-        mylog.push(`[Sonarr] Erro durante processamento: ${error.message}`);
+        mylog.push(`[Sonarr] Critical exception encountered during processing: ${error.message}`);
     }
 };
 
@@ -423,18 +433,17 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
 
     const fileNameEncoded = encodeURIComponent(file.meta.FileName);
 
-    // Processar Radarr se habilitado
+    // Route workflows depending on system control activation parameters
     if (String(inputs.radarr_enabled) === 'true') {
         await processRadarrTags(inputs, fileNameEncoded, mylog);
     }
 
-    // Processar Sonarr se habilitado
     if (String(inputs.sonarr_enabled) === 'true') {
         await processSonarrTags(inputs, fileNameEncoded, mylog);
     }
 
     if (!mylog.length) {
-        mylog.push('Radarr e Sonarr estão desabilitados nas configurações do plugin.');
+        mylog.push('Both Radarr and Sonarr integration features are disabled in plugin configuration rules.');
     }
 
     response.infoLog = mylog.join('\n');

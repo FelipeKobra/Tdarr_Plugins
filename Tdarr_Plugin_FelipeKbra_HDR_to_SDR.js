@@ -6,7 +6,7 @@ const details = () => {
     Name: "FelipeKbra - HDR to SDR",
     Type: "Video",
     Operation: "Transcode",
-    Description: "Conversão HDR para SDR de alta fidelidade com sistema de logs expandido para monitoramento.",
+    Description: "High-fidelity HDR to SDR conversion with an expanded log system for monitoring.",
     Version: "2.4.1",
     Tags: "video,ffmpeg,hdr,sdr,nvenc,bt2390",
   };
@@ -24,32 +24,36 @@ async function plugin(file, librarySettings, inputs, otherArguments) {
     file,
   };
 
-  // Log inicial de varredura
-  response.infoLog += "🔍 [INFO] Analisando metadados do arquivo...\n";
+  // Initial scanning log
+  response.infoLog += "🔍 [INFO] Analyzing file metadata...\n";
 
+  // Find the primary video stream track
   const videoStream = file.ffProbeData.streams.find(s => s.codec_type === 'video');
   
+  // Abort execution if no video tracks are found
   if (!videoStream) {
-    response.infoLog += "❌ [ERRO] Nenhuma faixa de vídeo encontrada no arquivo.\n";
+    response.infoLog += "❌ [ERROR] No video stream found in the file.\n";
     return response;
   }
 
-  // Registra as propriedades de cor detectadas para diagnóstico
-  response.infoLog += `📊 [INFO] Color Transfer detectado: ${videoStream.color_transfer || 'Não identificado'}\n`;
-  response.infoLog += `📊 [INFO] Color Primaries detectado: ${videoStream.color_primaries || 'Não identificado'}\n`;
-  response.infoLog += `📊 [INFO] Resolução original: ${videoStream.width}x${videoStream.height}\n`;
+  // Record detected color and structural properties for diagnostics
+  response.infoLog += `📊 [INFO] Detected Color Transfer: ${videoStream.color_transfer || 'Not identified'}\n`;
+  response.infoLog += `📊 [INFO] Detected Color Primaries: ${videoStream.color_primaries || 'Not identified'}\n`;
+  response.infoLog += `📊 [INFO] Original Resolution: ${videoStream.width}x${videoStream.height}\n`;
 
-  // Verifica se o arquivo é realmente HDR (smpte2084 / PQ)
+  // Verify if the file is actually HDR10 (smpte2084 / PQ profile)
   if (videoStream.color_transfer !== 'smpte2084') {
-    response.infoLog += "☑ [PULO] O arquivo não utiliza perfil HDR10 (smpte2084). Nenhuma conversão necessária.\n";
+    response.infoLog += "☑ [SKIP] File does not use an HDR10 (smpte2084) profile. No conversion needed.\n";
     return response;
   }
 
-  response.infoLog += "🚀 [START] HDR10 detectado! Iniciando pipeline de transcodificação via Hardware (NVIDIA NVENC)...\n";
-  response.infoLog += "⚙️ [CONFIG] Aplicando algoritmo Tonemapping BT2390 (Peak: 100 nits).\n";
-  response.infoLog += "⚙️ [CONFIG] Forçando amostragem yuv420p e metadados no padrão SDR BT.709 para máxima compatibilidade.\n";
-  response.infoLog += "⚙️ [CONFIG] Utilizando Preset P4 (VBR / CQ 22) para estabilidade do driver.\n";
+  // Log pipeline initialization parameters
+  response.infoLog += "🚀 [START] HDR10 detected! Starting hardware-accelerated transcoding pipeline (NVIDIA NVENC)...\n";
+  response.infoLog += "⚙️ [CONFIG] Applying BT2390 Tonemapping algorithm (Peak: 100 nits).\n";
+  response.infoLog += "⚙️ [CONFIG] Forcing yuv420p sampling and standard SDR BT.709 metadata for maximum compatibility.\n";
+  response.infoLog += "⚙️ [CONFIG] Utilizing Preset P4 (VBR / CQ 22) for driver stability.\n";
 
+  // Construct hardware-accelerated pipeline args using CUDA decoder, tonemap filters, and NVENC parameters
   response.preset = `-init_hw_device cuda=cu:0 -filter_hw_device cu -hwaccel cuda -hwaccel_output_format cuda -c:v hevc_cuvid <io> ` +
                     `-vf "tonemap_cuda=tonemap=bt2390:peak=100:desat=0,scale_cuda=format=yuv420p" ` +
                     `-c:v hevc_nvenc -preset p4 -rc vbr -cq 22 ` +
@@ -57,10 +61,11 @@ async function plugin(file, librarySettings, inputs, otherArguments) {
                     `-profile:v main ` +
                     `-c:a copy -c:s copy`;
 
+  // Flag file for processing and ensure proper task scheduling inside Tdarr
   response.processFile = true;
   response.reQueueAfter = true;
 
-  response.infoLog += "✅ [SUCESSO] Argumentos do FFmpeg gerados e enviados para a fila do Tdarr.\n";
+  response.infoLog += "✅ [SUCCESS] FFmpeg arguments generated and submitted to the Tdarr queue.\n";
 
   return response;
 }
