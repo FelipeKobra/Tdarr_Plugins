@@ -9,7 +9,7 @@ const details = () => ({
   Description:
     `This plugin will transcode H264 or reconvert HEVC files using Intel QSV with bframes, 10bit, and (optional) HDR. 
     Optimized for pure Intel QSV pipeline performance (Zero-Copy GPU memory) with crop-safe passthrough handling. Requires an Intel GPU with Quick Sync Video (7th gen+/Iris/Arc recommended).`,
-  Version: '1.1',
+  Version: '1.3',
   Tags: 'pre-processing,ffmpeg,qsv h265, hdr, intel quicksync',
   Inputs: [
     {
@@ -322,20 +322,51 @@ function checkTags(file, inputs) {
   return response;
 }
 
+function findLinuxRenderDevice() {
+  // Auto-detects the Intel DRM render node (e.g. /dev/dri/renderD128) instead of
+  // relying on ffmpeg's own auto-derivation.
+  const fs = require('fs');
+  const drmPath = '/dev/dri';
+  try {
+    const nodes = fs.readdirSync(drmPath).filter((n) => n.startsWith('renderD'));
+    if (nodes.length > 0) {
+      nodes.sort();
+      return `${drmPath}/${nodes[0]}`;
+    }
+  } catch (err) {
+    // /dev/dri not present/readable - fall through to the generic fallback.
+  }
+  return null;
+}
+
 function getQsvHwaccelInit() {
-  // Auto-detects the correct -init_hw_device string for the platform Tdarr is
-  // running on, so the user doesn't need to know/configure a render device path.
+  // Builds the correct -init_hw_device chain for the platform Tdarr is running
+  // on, so the user doesn't need to know/configure a render device path.
+  //
+  // IMPORTANT: Tdarr decides which *type* of GPU worker (QSV, VAAPI, NVENC, etc.)
+  // is allowed to pick up a job by scanning the generated ffmpeg command for
+  // keywords like "qsv", "vaapi", "nvenc", "cuda". On Linux, Intel's QSV runtime
+  // uses VAAPI internally, so the "obvious" derivation syntax
+  // (-init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=hw@va) puts
+  // the literal word "vaapi" in the command. Tdarr then flags the job as
+  // "Require VAAPI Worker" instead of "Require QSV Worker" - and since the Node
+  // is set up as a QSV worker (not VAAPI), the job gets stuck forever.
+  //
+  // The fix is to init QSV directly (-init_hw_device qsv=hw) and point it at the
+  // render node with -qsv_device, which never puts the word "vaapi" anywhere in
+  // the command, while still using the same underlying hardware/driver.
   const os = require('os');
   switch (os.platform()) {
-    case 'linux':
-      // hw_any + child_device_type=vaapi lets ffmpeg pick the first available
-      // Intel render node (e.g. /dev/dri/renderD128) automatically.
-      return '-hwaccel qsv -hwaccel_output_format qsv -init_hw_device qsv:hw_any,child_device_type=vaapi';
+    case 'linux': {
+      const renderDevice = findLinuxRenderDevice();
+      const deviceFlag = renderDevice ? ` -qsv_device ${renderDevice}` : '';
+      return `-init_hw_device qsv=hw${deviceFlag} -hwaccel qsv -hwaccel_output_format qsv -filter_hw_device hw`;
+    }
     case 'win32':
-      return '-hwaccel qsv -hwaccel_output_format qsv -init_hw_device qsv:hw,child_device_type=d3d11va';
+      return '-init_hw_device qsv=hw,child_device_type=d3d11va -hwaccel qsv -hwaccel_output_format qsv -filter_hw_device hw';
     default:
       // Fallback for any other platform (e.g. inside less common container setups).
-      return '-hwaccel qsv -hwaccel_output_format qsv -init_hw_device qsv:hw_any';
+      return '-init_hw_device qsv=hw -hwaccel qsv -hwaccel_output_format qsv -filter_hw_device hw';
   }
 }
 
