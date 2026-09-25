@@ -418,7 +418,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   outputOptions += ' -max_muxing_queue_size 9999';
 
   if (inputs.bframes === true) {
-    outputOptions += ' -bf 2 -b_ref_mode middle';
+    // hevc_qsv has no -b_ref_mode (NVENC-only); -b_strategy 1 is the QSV way to use B-frames as references.
+    outputOptions += ' -bf 2 -b_strategy 1';
   }
 
   response.preset = `${inputOptions.trim()},${outputOptions.trim()}`;

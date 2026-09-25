@@ -74,9 +74,10 @@ Same goal as the NVENC plugin (H.264 or bloated HEVC → 10-bit HEVC in MKV), bu
 * **Same Loop Protection and HDR Guard** as the NVENC plugin (`COPYRIGHT=processed` tag, BT.2020/SMPTE 2084 metadata passthrough).
 
 #### 🎛️ Input Parameters:
-Same inputs as the NVENC plugin, with one different default:
+Same inputs as the NVENC plugin, with these differences:
 * `reconvert_hdr` (Boolean | Default: `false`): HDR files are skipped unless enabled.
-* All other inputs (`target_bitrate_*`, `target_pct_reduction`, `bframes`, `reconvert_hevc`, `hevc_*_filter_bitrate`, `tagName`, `tagValues`, `exactMatch`, `continueIfTagFound`) behave and default exactly as described in plugin #1.
+* `bframes` (Boolean | Default: `false`): Adds `-bf 2 -b_strategy 1` (B-pyramid, the QSV equivalent of NVENC's `-b_ref_mode middle`).
+* All other inputs (`target_bitrate_*`, `target_pct_reduction`, `reconvert_hevc`, `hevc_*_filter_bitrate`, `tagName`, `tagValues`, `exactMatch`, `continueIfTagFound`) behave and default exactly as described in plugin #1.
 
 ---
 
