@@ -1,4 +1,8 @@
 /* eslint-disable */
+// Intel QSV port of Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC_MKV, which is based on
+// Tdarr_Plugin_purpan_H264_HEVC_to_NVENC_optional_HDR by purpan (axel-devs):
+//   https://github.com/axel-devs/Tdarr-H264-HEVC-to-NVENC-with-Optional-HDR
+// which in turn builds on tws101's Ultimate GPU Transcoder HDR plugin.
 // tdarrSkipTest
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_H264_HEVC_to_QSV_MKV',

@@ -1,4 +1,5 @@
 /* eslint no-plusplus: ["error", { "allowForLoopAfterthoughts": true }] */
+// Based on Tdarr_Plugin_MC93_Migz1Remux (v1.2) by Migz.
 
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_Remux',

@@ -1,4 +1,8 @@
 /* eslint-disable */
+// Based on Tdarr_Plugin_purpan_H264_HEVC_to_NVENC_optional_HDR by purpan (axel-devs):
+//   https://github.com/axel-devs/Tdarr-H264-HEVC-to-NVENC-with-Optional-HDR
+// which in turn builds on tws101's Ultimate GPU Transcoder HDR plugin.
+// Loop-prevention tag check adapted from Tdarr_Plugin_00td_filter_by_stream_tag.
 // tdarrSkipTest
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC_MKV',

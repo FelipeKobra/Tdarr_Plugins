@@ -1,4 +1,6 @@
 /* eslint-disable */
+// Based on Tdarr_Plugin_henk_Keep_Native_Lang_Plus_Eng (v1.2) by henk.
+// Changes: axios replaced by native http/https; Radarr's originalLanguage is used directly.
 module.exports.dependencies = ['@cospired/i18n-iso-languages@4.2.0'];
 
 const details = () => ({

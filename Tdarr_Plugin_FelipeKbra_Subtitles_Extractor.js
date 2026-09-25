@@ -1,4 +1,5 @@
 /* eslint-disable */
+// Based on Tdarr_Plugin_rr01_drpeppershaker_extract_subs_to_SRT (v1.06) by drpeppershaker.
 // tdarrSkipTest
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_Subtitles_Extractor',
