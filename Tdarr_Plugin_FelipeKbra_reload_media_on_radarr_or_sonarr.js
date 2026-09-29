@@ -70,6 +70,8 @@ const details = () => ({
     ],
 });
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 /**
  * Helper function using native node HTTP/HTTPS modules to run requests asynchronously
  * Avoids dependencies on external third-party request libraries like axios or fetch.
@@ -79,8 +81,9 @@ const makeRequest = (url, options, postData = null, mylog) => {
         // Dynamically select protocol module depending on target schema
         const lib = url.startsWith('https') ? require('https') : require('http');
         
-        mylog.push(`[Request] Calling: ${url}`);
-        
+        // Never write the API key into the Tdarr job report.
+        mylog.push(`[Request] Calling: ${url.replace(/apikey=[^&]+/i, 'apikey=***')}`);
+
         const req = lib.request(url, options, (res) => {
             let data = '';
             // Aggregate incoming data buffers
@@ -95,6 +98,10 @@ const makeRequest = (url, options, postData = null, mylog) => {
                     resolve({ status: res.statusCode, data: data });
                 }
             });
+        });
+
+        req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+            req.destroy(new Error(`timeout after ${REQUEST_TIMEOUT_MS / 1000}s`));
         });
 
         req.on('error', (err) => {

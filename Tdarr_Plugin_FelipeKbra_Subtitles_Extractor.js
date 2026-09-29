@@ -8,7 +8,7 @@ const details = () => ({
   Type: 'Video',
   Operation: 'Transcode',
   Description: 'This plugin extracts embedded subs in one pass inside Tdarr, optionally removes them, and can clean formatting tags.',
-  Version: '1.08',
+  Version: '1.09',
   Tags: 'pre-processing,subtitle only,ffmpeg,configurable',
   Inputs: [
     {
@@ -91,9 +91,11 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   response.infoLog += 'Found subs to extract!\n';
 
   let command = '-y <io>';
+  // Two tracks resolving to the same name (e.g. two untagged "eng") would overwrite each other.
+  const usedSuffixes = new Set();
   for (let i = 0; i < subsArr.length; i += 1) {
     const subStream = subsArr[i];
-    let lang = '';
+    let lang = 'und';
     let type = '';
     let title = 'none';
 
@@ -123,7 +125,15 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     // Append flag if track is designated for the hearing impaired (SDH)
     if (subStream?.disposition?.hearing_impaired) {
       type = '.sdh';
-    } 
+    }
+    // Forced (foreign parts only) subs get Jellyfin/Plex's ".forced" flag instead of clobbering the full track.
+    if (subStream?.disposition?.forced || titleLower.includes('forced') || titleLower.includes('forçad')) {
+      type += '.forced';
+    }
+    if (usedSuffixes.has(`${lang}${type}`)) {
+      type += `.${subStream.index}`;
+    }
+    usedSuffixes.add(`${lang}${type}`);
 
     const { originalLibraryFile } = otherArguments;
     let subsFile = '';

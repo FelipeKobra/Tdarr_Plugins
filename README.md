@@ -35,21 +35,26 @@ Several plugins are forks of great work from the Tdarr community. Every derived 
 Transcodes older H.264 video streams or high-bitrate/bloated HEVC files into a standard, highly compressed 10-bit HEVC stream inside an MKV container using hardware-accelerated NVIDIA NVENC.
 
 #### 🚀 Why It Differs from Standard Plugins:
-* **Pure CUDA Zero-Copy Pipeline:** Traditional community plugins bottleneck hardware performance by continuously shifting video frames back and forth between host CPU RAM and GPU VRAM when executing video filters or color adjustments. This plugin enforces a strict native hardware pipeline, keeping frames inside VRAM from decoding (`cuvid`), through scaling/pixel formatting (`scale_cuda`), to encoding (`hevc_nvenc`).
-* **Resolution-Adaptive Bitrate Ceilings:** Rather than applying a single blind bitrate target, it evaluates file dimensions and maps files against dynamic, resolution-specific thresholds (480p up to 4K UHD).
-* **Native HDR Passthrough Guard:** It explicitly tracks color properties (`bt2020`, `bt2020nc`, `smpte2084`) and reapplies structural HDR tags during conversion to prevent washed-out colors.
-* **In-Stream Loop Prevention Flag:** Instead of relying on vulnerable local cache files or external state tracking databases, it injects a custom, persistent global metadata flag (`COPYRIGHT=processed`) directly into the file stream. Future scans identify this tag instantly and skip the file, completely preventing recursive transcoding loops.
+* **Quality-First Rate Control:** Encodes with constant quality (`-rc vbr -cq N -b:v 0`) plus a per-resolution `-maxrate` ceiling, using NVENC's best settings (`-preset p7 -tune hq -multipass fullres -rc-lookahead 32 -spatial-aq 1 -aq-strength 8`). Simple scenes get fewer bits, complex scenes get more, and the ceiling never exceeds `source video bitrate × target_pct_reduction`, so the output is always smaller than the source.
+* **Pure CUDA Pipeline When the GPU Can Decode:** NVDEC-supported sources (8-bit H.264, HEVC, VP9, MPEG-2, VC-1 in 4:2:0) stay in VRAM from decode (`-hwaccel cuda`) through `scale_cuda` to `hevc_nvenc`.
+* **Safe CPU Fallback:** Sources NVDEC can't decode (10-bit H.264 / Hi10P anime, AV1 on Turing, MPEG-4/Xvid, 4:2:2/4:4:4) are decoded on the CPU and uploaded with `hwupload_cuda`, instead of failing.
+* **Automatic Deinterlacing:** Interlaced sources (`field_order` tt/bb/tb/bt) go through `bwdif_cuda` (or `bwdif` on the CPU path).
+* **Resolution Tiers by Real Dimensions:** Tiers come from the stream width/height, so cropped (1920×800) and 1440p files get sensible settings instead of an "Other" fallback.
+* **Video-Only Bitrate:** The source bitrate comes from the stream `bit_rate` or the MKV `BPS` tag (falling back to container minus audio), so large lossless audio no longer makes a small HEVC look "bloated".
+* **HDR / Dolby Vision Guard:** HDR10/HLG is skipped unless `reconvert_hdr` is on (then BT.2020 tags are re-applied). Dolby Vision is always skipped, since re-encoding drops the RPU.
+* **In-Stream Loop Prevention Flag:** It writes a metadata tag (`COPYRIGHT=processed`) into the video stream. Future scans see it and skip the file, which prevents recursive transcoding loops.
+
+> **GPU note:** the GTX 1650 (TU117) uses Volta-generation NVENC. It has no HEVC B-frames and no temporal AQ, so keep `bframes=false` there. With the settings above it encodes 1080p at about 5× real time.
 
 #### 🎛️ Input Parameters:
-* `target_bitrate_480p576p` (Number | Default: `1000`): Bitrate target in kbps for low-resolution files.
-* `target_bitrate_720p` (Number | Default: `2000`): Bitrate target in kbps for 720p files.
-* `target_bitrate_1080p` (Number | Default: `4000`): Bitrate target in kbps for 1080p files.
-* `target_bitrate_4KUHD` (Number | Default: `8000`): Bitrate target in kbps for 4K UHD content.
-* `target_pct_reduction` (Number | Default: `0.5`): Fallback reduction percentage if original H.264 bitrate sits under the static resolution caps.
-* `bframes` (Boolean | Default: `false`): Enables or disables lookahead B-Frames (`-bf 2 -b_ref_mode middle`) within NVENC.
-* `reconvert_hevc` (Boolean | Default: `true`): Forces processing on pre-existing HEVC assets if they exceed the filter bitrates.
-* `reconvert_hdr` (Boolean | Default: `true`): Dictates whether files containing High Dynamic Range metadata should be re-encoded.
-* `hevc_480p_576p_filter_bitrate` to `hevc_filter_bitrate_4KUHD`: Custom thresholds to instantly skip files already encoded in efficient HEVC if they fall below these values.
+* `target_bitrate_480p576p` / `target_bitrate_720p` / `target_bitrate_1080p` / `target_bitrate_4KUHD` (Number | Defaults: `2000` / `4000` / `6000` / `16000`): Max bitrate (kbps) per tier. 1440p uses 1.8× the 1080p value.
+* `target_pct_reduction` (Number | Default: `0.7`): The max bitrate never exceeds source video bitrate × this factor.
+* `cq_480p576p` / `cq_720p` / `cq_1080p` / `cq_4KUHD` (Number | Defaults: `21` / `22` / `23` / `24`): NVENC constant quality per tier. Lower means better quality and bigger files.
+* `bframes` (Boolean | Default: `false`): Adds `-bf 3 -b_ref_mode middle`. Requires Turing NVENC or newer (RTX 20xx, GTX 1660, GTX 1650 Super).
+* `deinterlace` (Boolean | Default: `true`): Deinterlace interlaced sources.
+* `reconvert_hevc` (Boolean | Default: `true`): Re-encode HEVC/VP9/AV1 whose video bitrate is above the filter thresholds.
+* `reconvert_hdr` (Boolean | Default: `false`): Re-encode HDR10/HLG keeping HDR color metadata.
+* `hevc_480p_576p_filter_bitrate` / `hevc_720p_filter_bitrate` / `hevc_1080p_filter_bitrate` / `hevc_filter_bitrate_4KUHD` (Number | Defaults: `3000` / `6000` / `9000` / `24000`): HEVC/VP9/AV1 video bitrate above which a file is re-encoded. Each is about 1.5× the tier ceiling, so a re-encode only happens when the saving is worth the generation loss.
 * `tagName` / `tagValues` (Strings | Default: `COPYRIGHT` / `processed`): Custom signature settings for loop protection.
 * `exactMatch` (Boolean | Default: `true`): Whether the tag value must match exactly or just be contained in the tag.
 * `continueIfTagFound` (Boolean | Default: `false`): Process the file even if the loop-protection tag is already present.
@@ -88,14 +93,21 @@ Same inputs as the NVENC plugin, with these differences:
 * **Origin:** Original plugin (no upstream).
 
 #### 🎯 Main Function:
-Identifies high-dynamic-range profiles (HDR10) and processes a high-fidelity down-conversion into standard-dynamic-range (SDR) formats with verbose pipeline logging.
+Detects HDR10 (PQ / `smpte2084`) and HLG (`arib-std-b67`) video and converts it permanently to SDR BT.709.
+
+> Jellyfin can tonemap HDR on the fly with NVENC. Keep this plugin enabled only if your players are SDR-only, because the conversion discards the HDR grade for good.
 
 #### 🚀 Why It Differs from Standard Plugins:
-* **GPU-Accelerated Tone Mapping:** Standard community alternatives rely on CPU-bound tonemapping packages (such as `zscale`), which degrade encoding performance down to single-digit frames-per-second and overheat host processors. This plugin invokes specialized **CUDA hardware tone-mapping algorithms (`tonemap_cuda=tonemap=bt2390`)** entirely inside the graphics hardware layer.
-* **Strict Chrominance & Luminance Correction:** It handles desaturation parameters natively (`desat=0`), applies hardware pixel scaling directly to the standard `yuv420p` layout, and strictly overrides output color spaces to standard Rec. 709 metadata boundaries (`-color_primaries bt709 -color_trc bt709 -colorspace bt709`). This ensures vibrant, crush-free, and highly compatible SDR streams without CPU intervention.
+* **GPU Tone Mapping:** `tonemap_cuda=tonemap=bt2390:peak=100:desat=0` (the same defaults Jellyfin uses) runs entirely on the GPU. CPU tonemapping with `zscale` runs at single-digit fps.
+* **10-bit SDR Output:** Tonemaps to `p010` and encodes HEVC Main10 with explicit BT.709 primaries/transfer/matrix, which avoids the banding an 8-bit output shows in gradients.
+* **Keeps Every Track:** It maps the main video plus all audio, subtitle and attachment streams. The previous version relied on ffmpeg's default selection and kept only one audio and one subtitle.
+* **Correct Decoder per Codec:** NVDEC is used for HEVC/VP9/H.264 in 4:2:0. Anything else (e.g. AV1 on Turing) is decoded on the CPU and uploaded to the GPU.
+* **No Double Encode:** It writes the same `COPYRIGHT=processed` tag as the NVENC plugin, so that plugin skips the SDR output.
 
 #### 🎛️ Input Parameters:
-* *None* (Self-orchestrated via dynamic file probe checks).
+* `cq` (Number | Default: `22`): NVENC constant quality of the SDR output.
+* `max_bitrate_1080p` / `max_bitrate_4KUHD` (Number | Defaults: `8000` / `20000`): Max bitrate ceilings in kbps.
+* `tagName` / `tagValue` (Strings | Default: `COPYRIGHT` / `processed`): Loop-protection tag written on the output. Must match the NVENC plugin.
 
 ---
 
@@ -109,6 +121,7 @@ Identifies high-dynamic-range profiles (HDR10) and processes a high-fidelity dow
 Isolates embedded text-based subtitle tracks, extracts them into standalone external `.srt` files side-by-side with the media file, handles styling sanitization, and strips them from the original video container if configured.
 
 #### 🚀 Why It Differs from Standard Plugins:
+* **Forced & Collision-Safe Naming:** Forced tracks (disposition or "forced"/"forçada" in the title) get a `.forced` suffix. Two tracks that would produce the same filename get the stream index appended instead of overwriting each other. Untagged tracks are named `.und`.
 * **Dual-Pass Regional Dialect Sorting:** Standard subtitle extractors match basic ISO codes blindly, labeling any Portuguese track as standard `.pt.srt`, which causes video players to display European Portuguese instead of Brazilian Portuguese. This plugin evaluates both the language code (`por`/`pt`) and evaluates track title strings for deep markers (`brazilian`, `br`) to accurately output `.pt-BR.srt` vs `.pt.srt`.
 * **Automated Accessibility Identification:** It reads internal stream disposition tracks to catch the `hearing_impaired` flag, appending `.sdh` directly to filenames dynamically (e.g., `.pt-BR.sdh.srt`).
 * **Regular Expression Text Cleaning:** During a structured re-queue stage (`reQueueAfter: true`), it reads the external subtitle payload and fires high-performance Regex scripts to strip advanced positioning tags from formats like ASS/SSA (`{\an8}`, `{\pos(x,y)}`) and HTML aesthetic code elements (`<i>`, `<font>`) to ensure uniform rendering across simple players.
@@ -132,7 +145,8 @@ Removes every audio track whose language is not the title's **original (native) 
 #### 🚀 Why It Differs from the Original:
 * **No `axios` Dependency:** All HTTP calls use native Node.js `http`/`https` behind a small promise helper, so the plugin only depends on `@cospired/i18n-iso-languages` and doesn't break when Tdarr's bundled packages change.
 * **Radarr Native Language Shortcut:** For movies it reads `originalLanguage` straight from Radarr's `/api/v3/parse` response, so the TMDB lookup (and TMDB key) isn't needed for movies.
-* **Explicit Error Reporting:** Non-200 answers and connection errors from Radarr, Sonarr and TMDB are written to the Tdarr log instead of failing silently.
+* **Explicit Error Reporting:** Non-200 answers and connection errors from Radarr, Sonarr and TMDB are written to the Tdarr log instead of failing silently. Requests time out after 15 s, so a hung *arr can't block a worker.
+* **Fail-Safe Language Resolution:** If the native language can't be mapped to an ISO-639-2 code, the plugin keeps every track. Tracks tagged without a language are kept, and the audio index still advances, so the right tracks are removed.
 * **Safety Guards (kept from upstream):** Tracks without tags or a language tag are kept, and the plugin cancels itself if the removal would leave the file with no audio at all.
 
 #### 🎛️ Input Parameters:
@@ -156,7 +170,7 @@ Cleans audio ecosystems inside video containers by dropping explicit director co
 #### 🚀 Why It Differs from Standard Plugins:
 * **Language-Isolated Pool Analysis:** Standard audio cleaners blindly look across a file and delete any stream that doesn't have the maximum channel count, which corrupts setups requiring a stereo fallback track for web direct-play. This plugin groups audio tracks by individual language codes first. It identifies the highest surround layout (e.g., 8ch or 6ch) and actively protects legitimate stereo downmix channels (like high-quality 2ch AAC/AC3 lines) from elimination.
 * **Blind Duplicate Purging:** It identifies and purges unlabelled "blind" duplicate channels (e.g., secondary hidden low-bitrate 2ch streams of the same codec).
-* **Multi-Lingual Commentary Matrix:** It screens stream dispositions (`comment` flag) and parses title tags through a robust multi-lingual string regex matrix (`commentary`, `comentário`, `director`, `diretor`, `cast`) to wipe commentary lines with high accuracy.
+* **Multi-Lingual Commentary Detection:** It checks the stream `comment` disposition and matches whole words in the title (`commentary`, `commentaries`, `comentário(s)`, `commento`). Titles such as "Director's Cut" or "Broadcast Mix" are not treated as commentary.
 
 #### 🎛️ Input Parameters:
 * *None* (Fully automated logic based on stream-by-stream validation pools).
@@ -175,6 +189,8 @@ Converts 2.0 audio tracks to AAC for maximum device compatibility and creates mi
 #### 🚀 Why It Differs from the Original:
 * **Downmix From Any Multichannel Layout:** The original only created stereo from 6/8-channel tracks. This version creates the missing 2.0 track from **any** track with more than 2 channels (2.1, 4.0, 5.0, 5.1, 6.1, 7.1, ...).
 * **Correct Per-Stream ffmpeg Addressing:** The original addressed codec options to the *source* stream index and used a global `-ac`, which could change the channel count of unrelated tracks. Every new track now gets its own `-c:a:N`, `-ac:a:N` and metadata addressed to its **output** index, so existing tracks are copied untouched.
+* **Per-Language Downmix Check:** The missing 2.0/5.1 check is done per language. A Portuguese 2.0 track no longer stops an English 5.1 track from getting its own 2.0. This matters when a later plugin removes surround tracks.
+* **Explicit AAC Bitrate:** Created or converted AAC stereo tracks use `aac_bitrate` (192k by default) instead of ffmpeg's 128k.
 * **Language & Title Preservation:** Downmixed tracks inherit the source language tag and get a clean title (`2.0` / `5.1`), or optionally the original title with the new layout appended (`E-AC-3 Atmos 5.1 - 2.0`). It won't produce a duplicated suffix such as `... 2.0 - 2.0`.
 * **Command-Line Safe Metadata:** Quotes, backticks, `$` and backslashes are stripped from titles/languages before they reach the ffmpeg command.
 
@@ -183,6 +199,8 @@ Converts 2.0 audio tracks to AAC for maximum device compatibility and creates mi
 * `downmix` (Boolean | Default: `false`): Create missing 5.1 / 2.0 tracks from higher-channel tracks.
 * `downmix_single_track` (Boolean | Default: `false`): Only create one downmix per layout instead of one per source track.
 * `preserve_channel_title` (Boolean | Default: `false`): Append the new layout to the original title instead of replacing it.
+* `downmix_51` (Boolean | Default: `false`): Also create a missing 5.1 AC3 track from 7.1/6.1 sources. Off by default because the recommended stack removes 6-channel audio right after this plugin.
+* `aac_bitrate` (Text | Default: `192k`): Bitrate for AAC stereo tracks created or converted by the plugin.
 
 ---
 
@@ -238,6 +256,7 @@ Forces Radarr and Sonarr to instantly re-analyze the specific movie or series fi
 
 #### 🚀 Why It Differs from Standard Plugins:
 * **Zero External Node Dependencies:** Standard notification scripts load large third-party network packages (like `axios` or `request`), which often cause dependency errors during Tdarr platform updates. This plugin uses **native Node.js `http` and `https` standard libraries** wrapped inside a lightweight asynchronous promise architecture.
+* **No Secrets in Logs:** The API key is masked (`apikey=***`) in the job report, and requests time out after 15 s.
 * **Explicit Targeted Database Commands:** Instead of triggering a heavy, slow global folder re-scan, it routes files via the `/api/v3/parse` system to find their exact media assignment. Once resolved, it triggers explicit targeted database actions (`RefreshSeries` or `RefreshMovie`) to update the asset immediately without unnecessary server load.
 
 #### 🎛️ Input Parameters:

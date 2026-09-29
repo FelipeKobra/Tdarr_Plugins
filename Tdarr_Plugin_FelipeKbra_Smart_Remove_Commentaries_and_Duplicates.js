@@ -6,10 +6,13 @@ const details = () => ({
   Type: 'Audio',
   Operation: 'Transcode',
   Description: 'Removes explicit commentary and duplicate tracks (such as blind 2ch AC3), protecting the downmix chain (8ch, 6ch, and 2ch AAC).',
-  Version: '1.2',
+  Version: '1.3',
   Tags: 'pre-processing,audio',
   Inputs: [],
 });
+
+// "commentary", "commentaries", "comentário(s)", "comentario(s)", "commento" as whole words.
+const COMMENTARY_REGEX = /(^|[^\p{L}])(commentar(y|ies)|coment[aá]rios?|commento)([^\p{L}]|$)/iu;
 
 const plugin = (file, librarySettings, inputs, otherArguments) => {
   const lib = require('../methods/lib')();
@@ -56,8 +59,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       // -----------------------------------------------------------------------
       // 1. Explicit Commentary Detection Filter
       // -----------------------------------------------------------------------
-      const isCommentary = stream.disposition?.comment === 1 || 
-        ['commentary', 'comentário', 'comentario', 'director', 'diretor', 'cast'].some(k => title.includes(k));
+      // Whole-word match only: "Director's Cut", "broadcast" or "cast" must not drop a main track.
+      const isCommentary = stream.disposition?.comment === 1 || COMMENTARY_REGEX.test(title);
 
       if (isCommentary) {
         streamsToRemove.push(stream);
@@ -97,7 +100,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   // FFmpeg Command Construction
   // -----------------------------------------------------------------------
   // Map all video and optional subtitle tracks first
-  response.preset = ',-map 0:v -map 0:s? ';
+  response.preset = ',-map 0:v -map 0:s? -map 0:t? ';
   
   // Map explicitly selected clean audio streams back into the container
   streamsToKeep.forEach(s => { response.preset += `-map 0:${s.index} `; });

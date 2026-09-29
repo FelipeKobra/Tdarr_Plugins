@@ -14,7 +14,7 @@ const details = () => ({
     'Native' languages are the ones that are listed on imdb/tmdb. It does an API call to 
     Radarr/Sonarr to check if the movie/series exists and grabs the IMDB id. As a last resort it 
     falls back to the IMDB id in the filename.`,
-  Version: '2.0.0',
+  Version: '2.1.0',
   Tags: '3rd party,pre-processing,configurable,audio,languages',
   Inputs: [
     {
@@ -97,7 +97,9 @@ const details = () => ({
   ],
 });
 
-const response = {
+const REQUEST_TIMEOUT_MS = 15000;
+
+const newResponse = () => ({
   processFile: false,
   preset: ', -map 0 ',
   container: '.',
@@ -105,7 +107,10 @@ const response = {
   FFmpegMode: true,
   reQueueAfter: false,
   infoLog: '',
-};
+});
+
+// Reset at the start of every plugin run so presets/logs never leak between files.
+let response = newResponse();
 
 /**
  * Funcao auxiliar para requisicoes HTTP/HTTPS nativas do Node.js
@@ -140,6 +145,10 @@ const makeRequest = (url, options = {}) => {
       });
     });
 
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`timeout after ${REQUEST_TIMEOUT_MS / 1000}s`));
+    });
+
     req.on('error', (err) => {
       reject(err);
     });
@@ -169,13 +178,19 @@ const processStreams = (result, file, user_langs) => {
   const langsTemp = result.original_language === 'cn' ? 'zh' : result.original_language;
   let langs = [];
 
-  const alpha3 = languages.alpha2ToAlpha3B(langsTemp);
-  if (alpha3) langs.push(alpha3);
+  const alpha3 = langsTemp ? languages.alpha2ToAlpha3B(langsTemp) : undefined;
 
   response.infoLog += `Original language: ${langsTemp}, Using code: ${alpha3}\n`;
 
+  // Without a resolved native language every foreign audio track would be removed. Keep everything instead.
+  if (!alpha3) {
+    response.infoLog += '☒Could not resolve the native language code. Keeping all audio tracks. \n';
+    return tracks;
+  }
+  langs.push(alpha3);
+
   if (user_langs) {
-    langs = langs.concat(user_langs);
+    langs = langs.concat(user_langs.map((l) => l.trim().toLowerCase()).filter(Boolean));
   }
   if (!langs.includes('eng')) langs.push('eng');
   if (!langs.includes('und')) langs.push('und');
@@ -206,6 +221,9 @@ const processStreams = (result, file, user_langs) => {
         streamIndex += 1;
       } else {
         response.infoLog += `☒No language tag found on audio track ${streamIndex}. Keeping it. \n`;
+        tracks.keep.push(streamIndex);
+        // Must advance too, otherwise every following -map -0:a:N points at the wrong track.
+        streamIndex += 1;
       }
     }
   }
@@ -263,6 +281,7 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
   const lib = require('../methods/lib')();
   inputs = lib.loadDefaultValues(inputs, details);
 
+  response = newResponse();
   response.container = `.${file.container}`;
   let prio = ['radarr', 'sonarr'];
   let radarrResult = null;

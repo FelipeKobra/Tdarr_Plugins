@@ -11,94 +11,134 @@ const details = () => ({
   Type: 'Video',
   Operation: 'Transcode',
   Description:
-    `This plugin will transcode H264 or reconvert HEVC files using NVENC with bframes, 10bit, and (optional) HDR. 
-    Optimized for pure CUDA pipeline performance (Zero-Copy VRAM) with crop-safe passthrough handling. Requires a Turing NVIDIA GPU or newer.`,
-  Version: '1.6',
+    `Transcodes H264 (or re-encodes bloated HEVC/VP9/AV1) to 10-bit HEVC with NVENC using constant quality (CQ)
+    capped by a per-resolution max bitrate. Hardware decoding is used only when NVDEC supports the source;
+    otherwise frames are decoded on the CPU and uploaded to the GPU. Interlaced sources are deinterlaced.
+    Requires an NVIDIA GPU with HEVC NVENC (GTX 16xx / RTX 20xx or newer).`,
+  Version: '2.0',
   Tags: 'pre-processing,ffmpeg,nvenc h265, hdr, cuda',
   Inputs: [
     {
       name: 'target_bitrate_480p576p',
       type: 'number',
-      defaultValue: 1000,
+      defaultValue: 2000,
       inputUI: { type: 'text' },
-      tooltip: 'Specify the target bitrate in kilobits for 480p and 576p files.',
+      tooltip: 'Max bitrate (kbps) for 480p/576p. Quality is driven by CQ; this only caps complex scenes.',
     },
     {
       name: 'target_bitrate_720p',
       type: 'number',
-      defaultValue: 2000,
+      defaultValue: 4000,
       inputUI: { type: 'text' },
-      tooltip: 'Specify the target bitrate in kilobits for 720p files.',
+      tooltip: 'Max bitrate (kbps) for 720p. Quality is driven by CQ; this only caps complex scenes.',
     },
     {
       name: 'target_bitrate_1080p',
       type: 'number',
-      defaultValue: 4000,
+      defaultValue: 6000,
       inputUI: { type: 'text' },
-      tooltip: 'Specify the target bitrate in kilobits for 1080p files.',
+      tooltip: 'Max bitrate (kbps) for 1080p. 1440p uses 1.8x this value. Quality is driven by CQ.',
     },
     {
       name: 'target_bitrate_4KUHD',
       type: 'number',
-      defaultValue: 8000,
+      defaultValue: 16000,
       inputUI: { type: 'text' },
-      tooltip: 'Specify the target bitrate in kilobits for 4KUHD files.',
+      tooltip: 'Max bitrate (kbps) for 4K UHD. Quality is driven by CQ; this only caps complex scenes.',
     },
     {
       name: 'target_pct_reduction',
       type: 'number',
-      defaultValue: 0.5,
+      defaultValue: 0.7,
       inputUI: { type: 'text' },
-      tooltip: 'Specify the target reduction for H264 bitrates if the current bitrate is less than resolution targets.',
+      tooltip: 'The max bitrate never exceeds source video bitrate x this factor, so the output is always smaller. '
+        + 'HEVC at ~70% of the H264 bitrate keeps equivalent quality.',
+    },
+    {
+      name: 'cq_480p576p',
+      type: 'number',
+      defaultValue: 21,
+      inputUI: { type: 'text' },
+      tooltip: 'NVENC constant quality for 480p/576p. Lower = better quality and bigger files.',
+    },
+    {
+      name: 'cq_720p',
+      type: 'number',
+      defaultValue: 22,
+      inputUI: { type: 'text' },
+      tooltip: 'NVENC constant quality for 720p. Lower = better quality and bigger files.',
+    },
+    {
+      name: 'cq_1080p',
+      type: 'number',
+      defaultValue: 23,
+      inputUI: { type: 'text' },
+      tooltip: 'NVENC constant quality for 1080p and 1440p. Lower = better quality and bigger files.',
+    },
+    {
+      name: 'cq_4KUHD',
+      type: 'number',
+      defaultValue: 24,
+      inputUI: { type: 'text' },
+      tooltip: 'NVENC constant quality for 4K UHD. Lower = better quality and bigger files.',
     },
     {
       name: 'bframes',
       type: 'boolean',
       defaultValue: false,
       inputUI: { type: 'dropdown', options: ['false', 'true'] },
-      tooltip: 'Enables or disables bframes from being used.',
+      tooltip: 'Enables HEVC B-frames (-bf 3 -b_ref_mode middle). Requires Turing NVENC (RTX 20xx, GTX 1660/1650 Super) '
+        + 'or newer. The GTX 1650 (TU117) has Volta NVENC and FAILS with this enabled.',
+    },
+    {
+      name: 'deinterlace',
+      type: 'boolean',
+      defaultValue: true,
+      inputUI: { type: 'dropdown', options: ['false', 'true'] },
+      tooltip: 'Deinterlace interlaced sources (field_order tt/bb/tb/bt) with bwdif.',
     },
     {
       name: 'reconvert_hevc',
       type: 'boolean',
       defaultValue: true,
       inputUI: { type: 'dropdown', options: ['false', 'true'] },
-      tooltip: 'Will reconvert hevc files that are above the hevc_resolution_filter_bitrate',
+      tooltip: 'Re-encode HEVC/VP9/AV1 video whose bitrate is above the hevc_*_filter_bitrate thresholds.',
     },
     {
       name: 'reconvert_hdr',
       type: 'boolean',
       defaultValue: false,
       inputUI: { type: 'dropdown', options: ['false', 'true'] },
-      tooltip: 'Enable or disable reconverting HDR files.',
+      tooltip: 'Re-encode HDR10/HLG files keeping HDR color metadata. Dolby Vision files are always skipped.',
     },
     {
       name: 'hevc_480p_576p_filter_bitrate',
       type: 'number',
-      defaultValue: 2000,
+      defaultValue: 3000,
       inputUI: { type: 'text' },
-      tooltip: 'HEVC bitrate threshold in kilobits for 480p/576p files. Files below this value will be skipped.',
+      tooltip: 'HEVC/VP9/AV1 480p/576p video bitrate (kbps) above which the file is re-encoded. Keep ~1.5x the max bitrate '
+        + 'so re-encoding only happens when the saving is worth the generation loss.',
     },
     {
       name: 'hevc_720p_filter_bitrate',
       type: 'number',
-      defaultValue: 3000,
+      defaultValue: 6000,
       inputUI: { type: 'text' },
-      tooltip: 'HEVC bitrate threshold in kilobits for 720p files. Files below this value will be skipped.',
+      tooltip: 'HEVC/VP9/AV1 720p video bitrate (kbps) above which the file is re-encoded.',
     },
     {
       name: 'hevc_1080p_filter_bitrate',
       type: 'number',
-      defaultValue: 4000,
+      defaultValue: 9000,
       inputUI: { type: 'text' },
-      tooltip: 'HEVC bitrate threshold in kilobits for 1080p files. Files below this value will be skipped.',
+      tooltip: 'HEVC/VP9/AV1 1080p video bitrate (kbps) above which the file is re-encoded. 1440p uses 1.8x this value.',
     },
     {
       name: 'hevc_filter_bitrate_4KUHD',
       type: 'number',
-      defaultValue: 8000,
+      defaultValue: 24000,
       inputUI: { type: 'text' },
-      tooltip: 'HEVC bitrate threshold in kilobits for 4KUHD files. Files below this value will be skipped.',
+      tooltip: 'HEVC/VP9/AV1 4K UHD video bitrate (kbps) above which the file is re-encoded.',
     },
     {
       name: 'tagName',
@@ -112,7 +152,7 @@ const details = () => ({
       type: 'string',
       defaultValue: 'processed',
       inputUI: { type: 'text' },
-      tooltip: 'Comma-separated values for the metadata tag to check (e.g., processed).',
+      tooltip: 'Comma-separated values for the metadata tag to check. The first value is written on output.',
     },
     {
       name: 'exactMatch',
@@ -131,192 +171,158 @@ const details = () => ({
   ],
 });
 
+const MODERN_CODECS = ['hevc', 'vp9', 'av1'];
+const INTERLACED_ORDERS = ['tt', 'bb', 'tb', 'bt'];
+const HW_420_FORMATS = ['yuv420p', 'yuvj420p', 'nv12'];
+const HW_420_10BIT_FORMATS = ['yuv420p10le', 'p010le'];
+// Codecs NVDEC decodes on Turing and newer. AV1 is left to the CPU (dav1d): Turing has no AV1 NVDEC.
+const HW_DECODE_FORMATS = {
+  h264: HW_420_FORMATS,
+  hevc: [...HW_420_FORMATS, ...HW_420_10BIT_FORMATS],
+  vp9: [...HW_420_FORMATS, ...HW_420_10BIT_FORMATS],
+  mpeg2video: HW_420_FORMATS,
+  vc1: HW_420_FORMATS,
+};
+
 class Log {
   constructor() { this.entries = []; }
   Add(entry) { this.entries.push(entry); }
   AddSuccess(entry) { this.entries.push(`☑ ${entry}`); }
   AddError(entry) { this.entries.push(`☒ ${entry}`); }
-  GetLogData() { return this.entries.join('\n'); }
+  GetLogData() { return `${this.entries.join('\n')}\n`; }
 }
 
-class Configurator {
-  constructor(defaultOutputSettings = null) {
-    this.shouldProcess = false;
-    this.outputSettings = defaultOutputSettings || [];
-    this.inputSettings = [];
+const toKbps = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n / 1000 : null;
+};
+
+// MKV rarely has stream bit_rate; mkvmerge writes it to the BPS / BPS-eng tags instead.
+const streamKbps = (stream) => toKbps(stream.bit_rate)
+  || toKbps(stream.tags?.BPS)
+  || toKbps(stream.tags?.['BPS-eng']);
+
+function getVideoBitrateKbps(file, videoStream) {
+  const direct = streamKbps(videoStream);
+  if (direct) return direct;
+  const total = toKbps(file.ffProbeData?.format?.bit_rate) || toKbps(file.bit_rate);
+  if (!total) return null;
+  const audioKbps = file.ffProbeData.streams
+    .filter((s) => s.codec_type === 'audio')
+    .reduce((sum, s) => sum + (streamKbps(s) || 0), 0);
+  const estimate = total - audioKbps;
+  return estimate > 0 ? estimate : null;
+}
+
+function getTier(stream, inputs) {
+  const w = stream.width || 0;
+  const h = stream.height || 0;
+  if (w >= 3200 || h >= 1800) {
+    return { name: '4KUHD', cap: inputs.target_bitrate_4KUHD, cq: inputs.cq_4KUHD, filter: inputs.hevc_filter_bitrate_4KUHD };
   }
-  AddInputSetting(configuration) { if (configuration && configuration.trim() !== '') this.inputSettings.push(configuration); }
-  AddOutputSetting(configuration) { this.shouldProcess = true; this.outputSettings.push(configuration); }
-  GetOutputSettings() { return this.outputSettings.join(' '); }
-  GetInputSettings() { return this.inputSettings.join(' '); }
-}
-
-function checkAbort(inputs, file, logger) {
-  if (file.fileMedium !== 'video') { logger.AddError('File is not a video.'); return true; }
-  return false;
-}
-
-function calculateBitrate(file) {
-  let bitrateProbe = file.ffProbeData.streams[0].bit_rate;
-  return isNaN(bitrateProbe) ? file.bit_rate : bitrateProbe;
-}
-
-function loopOverStreamsOfType(file, type, method) {
-  let id = 0;
-  for (let i = 0; i < file.ffProbeData.streams.length; i++) {
-    if (file.ffProbeData.streams[i].codec_type.toLowerCase() === type) {
-      method(file.ffProbeData.streams[i], id);
-      id++;
-    }
+  if (w >= 2200 || h >= 1300) {
+    return {
+      name: '1440p',
+      cap: Math.round(inputs.target_bitrate_1080p * 1.8),
+      cq: inputs.cq_1080p,
+      filter: Math.round(inputs.hevc_1080p_filter_bitrate * 1.8),
+    };
   }
-}
-
-function checkHDRMetadata(stream, id, inputs, logger, configuration) {
-  const isHDR = (stream.color_space && ['bt2020', 'bt2020nc'].includes(stream.color_space)) || 
-                (stream.color_transfer && stream.color_transfer === 'smpte2084');
-
-  logger.Add(`Checking HDR Metadata for video stream ${id}`);
-  if (isHDR) {
-    logger.Add(`HDR Color Space/Transfer detected no stream ${id}`);
-    if (!inputs.reconvert_hdr) {
-      logger.AddError(`HDR detectado. Pulando codificação devido a reconvert_hdr=false.`);
-      return false;
-    }
-    logger.AddSuccess(`Mantendo metadados HDR originais.`);
-    configuration.AddOutputSetting(' -strict unofficial -color_primaries bt2020 -colorspace bt2020nc -color_trc smpte2084 ');
-    return true;
+  if (w >= 1700 || h >= 900) {
+    return { name: '1080p', cap: inputs.target_bitrate_1080p, cq: inputs.cq_1080p, filter: inputs.hevc_1080p_filter_bitrate };
   }
-  return true;
-}
-
-function buildVideoConfiguration(inputs, file, logger) {
-  const configuration = new Configurator(['-map 0']);
-  const tiered = {
-    '480p': { bitrate: inputs.target_bitrate_480p576p, max_increase: 100, cq: 22 },
-    '576p': { bitrate: inputs.target_bitrate_480p576p, max_increase: 100, cq: 22 },
-    '720p': { bitrate: inputs.target_bitrate_720p, max_increase: 200, cq: 23 },
-    '1080p': { bitrate: inputs.target_bitrate_1080p, max_increase: 400, cq: 24 },
-    '4KUHD': { bitrate: inputs.target_bitrate_4KUHD, max_increase: 400, cq: 26 },
-    Other: { bitrate: inputs.target_bitrate_1080p, max_increase: 400, cq: 24 },
-  };
-
-  const inputDecoderSettings = {
-    h263: '-c:v h263_cuvid',
-    h264: '-c:v h264_cuvid',
-    mjpeg: '-c:v mjpeg_cuvid',
-    mpeg1: '-c:v mpeg1_cuvid',
-    mpeg2: '-c:v mpeg2_cuvid',
-    vc1: '-c:v vc1_cuvid',
-    vp8: '-c:v vp8_cuvid',
-    vp9: '-c:v vp9_cuvid',
-    hevc: '-c:v hevc_cuvid',
-  };
-
-  function videoProcess(stream, id) {
-    if (stream.codec_name === 'mjpeg') { configuration.AddOutputSetting(`-map -v:${id}`); return; }
-    if (!checkHDRMetadata(stream, id, inputs, logger, configuration)) return;
-
-    const filterBitrate480 = (inputs.hevc_480p_576p_filter_bitrate * 1000);
-    const filterBitrate720 = (inputs.hevc_720p_filter_bitrate * 1000);
-    const filterBitrate1080 = (inputs.hevc_1080p_filter_bitrate * 1000);
-    const filterBitrate4k = (inputs.hevc_filter_bitrate_4KUHD * 1000);
-    const fileResolution = file.video_resolution;
-
-    if (inputs.reconvert_hevc === false && (stream.codec_name === 'hevc' || stream.codec_name === 'vp9')) {
-      logger.AddSuccess(`Video stream ${id} is hevc, and hevc reconvert is off`);
-      return;
-    }
-
-    function reconvertcheck(filterbitrate, res, res2) {
-      if ((filterbitrate > 0) && ((fileResolution === res) || (fileResolution === res2))) {
-        if ((stream.codec_name === 'hevc' || stream.codec_name === 'vp9') && (file.bit_rate < filterbitrate)) {
-          logger.AddSuccess(`Stream ${id} abaixo do critério de processamento.`);
-          return true;
-        }
-      }
-      return false;
-    }
-
-    if (reconvertcheck(filterBitrate480, '480p', '576p') || reconvertcheck(filterBitrate720, '720p') || 
-        reconvertcheck(filterBitrate1080, '1080p') || reconvertcheck(filterBitrate4k, '4KUHD')) {
-      return;
-    }
-
-    if (stream.codec_name === 'png') {
-      configuration.AddOutputSetting(`-map -0:v:${id}`);
-    } else {
-      const bitrateProbe = (calculateBitrate(file) / 1000);
-      let bitrateTarget = 0;
-      const tier = tiered[file.video_resolution] || tiered.Other;
-      
-      const bitrateCheck = parseInt(tier.bitrate);
-      if (bitrateProbe !== null && bitrateProbe < bitrateCheck) {
-        bitrateTarget = parseInt(bitrateProbe * inputs.target_pct_reduction);
-      } else {
-        bitrateTarget = parseInt(tier.bitrate);
-      }
-      const bitrateMax = bitrateTarget + tier.max_increase;
-      const { cq } = tier;
-
-      configuration.AddOutputSetting(`-c:v hevc_nvenc -tag:v hvc1 -profile:v main10 -vf "scale_cuda=format=p010le:passthrough=0" -gpu 0 -surfaces 64 -qmin 0 -cq:v ${cq} -b:v ${bitrateTarget}k -maxrate:v ${bitrateMax}k -preset slow -multipass fullres -rc-lookahead 32 -spatial_aq:v 1 -aq-strength:v 15 -threads 1 -metadata:s:v:0 COPYRIGHT=processed`);
-      
-      let decoderSetting = inputDecoderSettings[file.video_codec_name];
-
-      if (file.video_codec_name === 'h264') {
-        const bitDepth = stream.bits_per_raw_sample ? parseInt(stream.bits_per_raw_sample, 10) : 8;
-        const is10bit = bitDepth === 10 || (stream.pix_fmt && stream.pix_fmt.includes('10'));
-
-        if (is10bit) {
-          logger.Add(`[AVISO] H264 de 10 bits detectado. Desativando cuvid decoder temporariamente para processar na CPU.`);
-          decoderSetting = ''; 
-        }
-      }
-
-      if (decoderSetting !== undefined && decoderSetting.trim() !== '') {
-        configuration.AddInputSetting(decoderSetting);
-      }
-
-      logger.Add(`Transcoding stream ${id} to HEVC using NVidia NVENC`);
-    }
+  if (w >= 1100 || h >= 650) {
+    return { name: '720p', cap: inputs.target_bitrate_720p, cq: inputs.cq_720p, filter: inputs.hevc_720p_filter_bitrate };
   }
-
-  loopOverStreamsOfType(file, 'video', videoProcess);
-  if (!configuration.shouldProcess) logger.AddSuccess('No video processing necessary');
-  return configuration;
+  return { name: 'SD', cap: inputs.target_bitrate_480p576p, cq: inputs.cq_480p576p, filter: inputs.hevc_480p_576p_filter_bitrate };
 }
 
-function buildAudioConfiguration() { return new Configurator(['-c:a copy']); }
-function buildSubtitleConfiguration() { return new Configurator(['-c:s copy']); }
+const isAttachedPicture = (stream) => stream.disposition?.attached_pic === 1
+  || ['mjpeg', 'png', 'bmp', 'gif'].includes(stream.codec_name);
+
+const isDolbyVision = (stream) => (stream.side_data_list || [])
+  .some((sd) => String(sd.side_data_type || '').toLowerCase().includes('dovi'));
+
+const isHDR = (stream) => ['smpte2084', 'arib-std-b67'].includes(stream.color_transfer)
+  || stream.color_primaries === 'bt2020';
+
+const canHwDecode = (stream) => (HW_DECODE_FORMATS[stream.codec_name] || []).includes(stream.pix_fmt);
 
 function checkTags(file, inputs) {
   const { strHasValue } = require('../methods/utils');
-  const lib = require('../methods/lib')();
-  inputs = lib.loadDefaultValues(inputs, details);
-  const response = { processFile: false, infoLog: '' };
-  
-  if (inputs.tagName.trim() === '' || inputs.tagValues.trim() === '') return { processFile: true, infoLog: '' };
-  
-  const tagName = inputs.tagName.trim();
-  const tagValues = inputs.tagValues.trim().split(',');
-  let streamContainsTag = false;
+  if (inputs.tagName === '' || inputs.tagValues === '') return { processFile: true, infoLog: '' };
 
-  try {
-    for (let i = 0; i < file.ffProbeData.streams.length; i++) {
-      if (file.ffProbeData.streams[i]?.tags && strHasValue(tagValues, file.ffProbeData.streams[i].tags[tagName], inputs.exactMatch)) {
-        streamContainsTag = true;
-        break;
-      }
-    }
-    if (inputs.continueIfTagFound === false && streamContainsTag === true) {
-      response.processFile = false;
-      response.infoLog += `Tag encontrada. Ignorando arquivo para evitar loops.\n`;
-    } else {
-      response.processFile = true;
-    }
-  } catch (err) {
-    response.processFile = false;
+  const tagName = inputs.tagName;
+  const tagValues = inputs.tagValues.split(',').map((v) => v.trim());
+  const hasTag = file.ffProbeData.streams
+    .some((s) => s?.tags && strHasValue(tagValues, s.tags[tagName], inputs.exactMatch));
+
+  if (hasTag && !inputs.continueIfTagFound) {
+    return { processFile: false, infoLog: `☑ Tag ${tagName} encontrada. Ignorando arquivo para evitar loops.\n` };
   }
-  return response;
+  return { processFile: true, infoLog: '' };
+}
+
+// Decides whether the video needs encoding and at which tier. Returns null when it should be skipped.
+function planEncode(file, stream, inputs, logger) {
+  if (isDolbyVision(stream)) {
+    logger.AddSuccess('Dolby Vision detectado. Pulando para não perder o RPU/cores.');
+    return null;
+  }
+  const hdr = isHDR(stream);
+  if (hdr && !inputs.reconvert_hdr) {
+    logger.AddSuccess('HDR detectado e reconvert_hdr=false. Pulando.');
+    return null;
+  }
+
+  const tier = getTier(stream, inputs);
+  const sourceKbps = getVideoBitrateKbps(file, stream);
+  logger.Add(`Vídeo ${stream.codec_name} ${stream.width}x${stream.height} (${tier.name}), `
+    + `bitrate ${sourceKbps ? `${Math.round(sourceKbps)} kbps` : 'desconhecido'}, pix_fmt ${stream.pix_fmt}`);
+
+  if (MODERN_CODECS.includes(stream.codec_name)) {
+    if (!inputs.reconvert_hevc) {
+      logger.AddSuccess(`${stream.codec_name} e reconvert_hevc=false. Pulando.`);
+      return null;
+    }
+    if (!sourceKbps || sourceKbps <= tier.filter) {
+      logger.AddSuccess(`${stream.codec_name} abaixo do limite de ${tier.filter} kbps. Pulando.`);
+      return null;
+    }
+  }
+
+  const reductionCap = sourceKbps ? Math.round(sourceKbps * inputs.target_pct_reduction) : Infinity;
+  const maxrate = Math.max(500, Math.min(tier.cap, reductionCap));
+  return { tier, maxrate, hdr };
+}
+
+function buildVideoArgs(stream, plan, inputs) {
+  const interlaced = inputs.deinterlace && INTERLACED_ORDERS.includes(stream.field_order);
+  const hwDecode = canHwDecode(stream);
+
+  const inputArgs = hwDecode
+    ? '-hwaccel cuda -hwaccel_output_format cuda'
+    : '-init_hw_device cuda=cu:0 -filter_hw_device cu';
+  const filters = hwDecode
+    ? [interlaced && 'bwdif_cuda=0:-1:1', 'scale_cuda=format=p010le']
+    : [interlaced && 'bwdif=0:-1:1', 'format=p010le', 'hwupload_cuda'];
+
+  const tagValue = inputs.tagValues.split(',')[0].trim();
+  const encoder = [
+    '-c:v:0 hevc_nvenc -gpu 0 -profile:v:0 main10',
+    `-vf "${filters.filter(Boolean).join(',')}"`,
+    '-preset p7 -tune hq -multipass fullres',
+    `-rc vbr -cq ${plan.tier.cq} -b:v 0 -maxrate ${plan.maxrate}k -bufsize ${plan.maxrate * 2}k`,
+    '-rc-lookahead 32 -spatial-aq 1 -aq-strength 8 -surfaces 64',
+    inputs.bframes ? '-bf 3 -b_ref_mode middle' : '-bf 0',
+  ];
+  if (plan.hdr) {
+    encoder.push(`-color_primaries bt2020 -colorspace bt2020nc -color_trc ${stream.color_transfer || 'smpte2084'}`);
+  }
+  if (inputs.tagName && tagValue) {
+    encoder.push(`-metadata:s:v:0 ${inputs.tagName}=${tagValue}`);
+  }
+  return { inputArgs, encoderArgs: encoder.join(' '), hwDecode, interlaced };
 }
 
 const plugin = (file, librarySettings, inputs, otherArguments) => {
@@ -331,42 +337,45 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     preset: '',
     reQueueAfter: true,
   };
-  
   const logger = new Log();
+
+  if (file.fileMedium !== 'video') {
+    response.infoLog += '☒ File is not a video.\n';
+    return response;
+  }
+
   const tagCheck = checkTags(file, inputs);
   if (!tagCheck.processFile) {
-    response.processFile = false;
     response.infoLog += tagCheck.infoLog;
     return response;
   }
-  
-  if (checkAbort(inputs, file, logger)) {
-    response.processFile = false;
+
+  const videoStream = file.ffProbeData.streams
+    .find((s) => s.codec_type === 'video' && !isAttachedPicture(s));
+  if (!videoStream) {
+    response.infoLog += '☒ Nenhum stream de vídeo encontrado.\n';
+    return response;
+  }
+
+  const plan = planEncode(file, videoStream, inputs, logger);
+  if (!plan) {
     response.infoLog += logger.GetLogData();
     return response;
   }
 
-  const videoSettings = buildVideoConfiguration(inputs, file, logger);
-  const audioSettings = buildAudioConfiguration();
-  const subtitleSettings = buildSubtitleConfiguration();
+  const video = buildVideoArgs(videoStream, plan, inputs);
+  logger.Add(`Decode: ${video.hwDecode ? 'NVDEC (GPU)' : 'CPU + hwupload_cuda'}${video.interlaced ? ', deinterlace bwdif' : ''}`);
+  logger.AddSuccess(`Encoding HEVC 10-bit NVENC p7/hq, CQ ${plan.tier.cq}, maxrate ${plan.maxrate} kbps`);
 
-  let inputOptions = '-hwaccel cuda -hwaccel_output_format cuda -analyzeduration 2147483647 -probesize 2147483647';
-  const videoInputSettings = videoSettings.GetInputSettings();
-  if (videoInputSettings && videoInputSettings.trim() !== '') {
-    inputOptions += ` ${videoInputSettings}`;
-  }
+  // Map the main video explicitly (drops cover art / extra angles), keep every audio, subtitle and attachment.
+  const outputArgs = [
+    `-map 0:${videoStream.index} -map 0:a? -map 0:s? -map 0:t?`,
+    video.encoderArgs,
+    '-c:a copy -c:s copy -c:t copy -max_muxing_queue_size 9999',
+  ].join(' ');
 
-  let outputOptions = videoSettings.GetOutputSettings();
-  outputOptions += ` ${audioSettings.GetOutputSettings()}`;
-  outputOptions += ` ${subtitleSettings.GetOutputSettings()}`;
-  outputOptions += ' -max_muxing_queue_size 9999';
-
-  if (inputs.bframes === true) {
-    outputOptions += ' -bf 2 -b_ref_mode middle';
-  }
-  
-  response.preset = `${inputOptions.trim()},${outputOptions.trim()}`;
-  response.processFile = videoSettings.shouldProcess;
+  response.preset = `${video.inputArgs},${outputArgs}`;
+  response.processFile = true;
   response.infoLog += logger.GetLogData();
   return response;
 };

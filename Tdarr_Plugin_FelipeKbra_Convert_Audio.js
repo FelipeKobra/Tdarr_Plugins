@@ -5,6 +5,7 @@
 //    (2.1, 4.0, 5.0, 5.1, 6.1, 7.1, ...), not only 6/7 channel tracks.
 //  - Downmixed streams get codec/channel options addressed to their own output
 //    index (the original addressed the source stream and used a global -ac).
+//  - Missing 2.0/5.1 layouts are checked per language, and AAC gets an explicit bitrate.
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_Convert_Audio',
   Stage: 'Pre-processing',
@@ -13,7 +14,7 @@ const details = () => ({
   Operation: 'Transcode',
   Description: 'This plugin can convert any 2.0 audio track/s to AAC and can create downmixed audio tracks. '
     + 'Any track with more than 2 channels (2.1, 4.0, 5.0, 5.1, 6.1, 7.1...) is downmixed to 2.0. \n\n',
-  Version: '1.0.0',
+  Version: '1.1.0',
   Tags: 'pre-processing,ffmpeg,audio only,configurable',
   Inputs: [{
     name: 'aac_stereo',
@@ -87,6 +88,29 @@ const details = () => ({
       + ' (e.g. "E-AC-3 Atmos 5.1 - 2.0").'
       + ' \\nExample:\\n\nfalse\n\n\\nExample:\\n\ntrue',
   },
+  {
+    name: 'downmix_51',
+    type: 'boolean',
+    defaultValue: false,
+    inputUI: {
+      type: 'dropdown',
+      options: [
+        'false',
+        'true',
+      ],
+    },
+    tooltip: 'Also create a missing 5.1 (AC3) track from 7.1/6.1 tracks. Leave false when a later plugin'
+      + ' removes 6-channel audio anyway.',
+  },
+  {
+    name: 'aac_bitrate',
+    type: 'string',
+    defaultValue: '192k',
+    inputUI: {
+      type: 'text',
+    },
+    tooltip: 'Bitrate for AAC stereo tracks created or converted by this plugin (ffmpeg default is 128k).',
+  },
   ],
 });
 
@@ -145,13 +169,16 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     .map((stream, index) => ({ stream, index }))
     .filter(({ stream }) => (stream.codec_type || '').toLowerCase() === 'audio');
 
-  const has2Channel = audioStreams.some(({ stream }) => stream.channels === 2);
-  const has6Channel = audioStreams.some(({ stream }) => stream.channels === 6);
+  // Existing/added layouts are tracked per language: a por 2.0 track must not stop an eng 5.1
+  // track from getting its own 2.0 downmix (surround tracks may be removed later in the stack).
+  const langOf = (stream) => (stream.tags?.language || 'und').toLowerCase();
+  const hasLayout = (lang, channels) => audioStreams
+    .some(({ stream }) => langOf(stream) === lang && stream.channels === channels);
+  const added = new Set();
+  const aacBitrate = /^\d+k$/.test(inputs.aac_bitrate) ? inputs.aac_bitrate : '192k';
 
   let ffmpegCommandInsert = '';
   let convert = false;
-  let is2channelAdded = false;
-  let is6channelAdded = false;
   // New streams are appended after every stream mapped by "-map 0", so their
   // audio output index starts after the existing audio streams.
   let nextNewAudioIdx = audioStreams.length;
@@ -159,7 +186,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   const addDownmix = (streamIndex, codec, channels, title, language) => {
     const outIdx = nextNewAudioIdx;
     nextNewAudioIdx += 1;
-    ffmpegCommandInsert += `-map 0:${streamIndex} -c:a:${outIdx} ${codec} -ac:a:${outIdx} ${channels} `
+    const bitrate = codec === 'aac' ? `-b:a:${outIdx} ${aacBitrate} ` : '';
+    ffmpegCommandInsert += `-map 0:${streamIndex} -c:a:${outIdx} ${codec} -ac:a:${outIdx} ${channels} ${bitrate}`
       + `-metadata:s:a:${outIdx} "title=${title}" `;
     if (language) {
       ffmpegCommandInsert += `-metadata:s:a:${outIdx} "language=${language}" `;
@@ -172,39 +200,43 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     // Strip characters that would break the ffmpeg command-line quoting.
     const originalTitle = (stream.tags?.title || '').replace(/["`$\\]/g, '');
     const language = (stream.tags?.language || '').replace(/["`$\\]/g, '');
+    const lang = langOf(stream);
+    // Without downmix_single_track every source track gets its own downmix.
+    const canAdd = (channelsOut) => !inputs.downmix_single_track || !added.has(`${lang}:${channelsOut}`);
 
     if (inputs.downmix === true) {
-      // 7/8 channel track but no 6 channel: create a 5.1 downmix.
+      // 7/8 channel track but no 6 channel in this language: create a 5.1 downmix.
       if (
-        (channels === 7 || channels === 8)
-        && has6Channel === false
-        && (inputs.downmix_single_track === false || is6channelAdded === false)
+        inputs.downmix_51 === true
+        && (channels === 7 || channels === 8)
+        && !hasLayout(lang, 6)
+        && canAdd(6)
       ) {
         const newTitle = inputs.preserve_channel_title
           ? buildDownmixTitle(originalTitle, '5.1') : '5.1';
         addDownmix(index, 'ac3', 6, newTitle, language);
         response.infoLog += `☒Audio track is ${describeChannels(channels)}, no 6 channel exists. `
           + `Creating 6 channel "${newTitle}" from ${channels} channel. \n`;
-        is6channelAdded = true;
+        added.add(`${lang}:6`);
       }
 
-      // Any track with more than 2 channels but no 2 channel: create a 2.0 AAC downmix.
+      // Any track with more than 2 channels but no 2 channel in this language: create a 2.0 AAC downmix.
       if (
         channels > 2
-        && has2Channel === false
-        && (inputs.downmix_single_track === false || is2channelAdded === false)
+        && !hasLayout(lang, 2)
+        && canAdd(2)
       ) {
         const newTitle = inputs.preserve_channel_title
           ? buildDownmixTitle(originalTitle, '2.0') : '2.0';
         addDownmix(index, 'aac', 2, newTitle, language);
         response.infoLog += `☒Audio track is ${describeChannels(channels)}, no 2 channel exists. `
           + `Creating 2 channel "${newTitle}" from ${channels} channel. \n`;
-        is2channelAdded = true;
+        added.add(`${lang}:2`);
       }
     }
 
     if (inputs.aac_stereo === true && stream.codec_name !== 'aac' && channels === 2) {
-      ffmpegCommandInsert += `-c:a:${audioIdx} aac `;
+      ffmpegCommandInsert += `-c:a:${audioIdx} aac -b:a:${audioIdx} ${aacBitrate} `;
       response.infoLog += '☒Audio track is 2 channel but is not AAC. Converting. \n';
       convert = true;
     }
