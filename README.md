@@ -41,20 +41,22 @@ Transcodes older H.264 video streams or high-bitrate/bloated HEVC files into a s
 * **Automatic Deinterlacing:** Interlaced sources (`field_order` tt/bb/tb/bt) go through `bwdif_cuda` (or `bwdif` on the CPU path).
 * **Resolution Tiers by Real Dimensions:** Tiers come from the stream width/height, so cropped (1920×800) and 1440p files get sensible settings instead of an "Other" fallback.
 * **Video-Only Bitrate:** The source bitrate comes from the stream `bit_rate` or the MKV `BPS` tag (falling back to container minus audio), so large lossless audio no longer makes a small HEVC look "bloated".
-* **HDR / Dolby Vision Guard:** HDR10/HLG is skipped unless `reconvert_hdr` is on (then BT.2020 tags are re-applied). Dolby Vision is always skipped, since re-encoding drops the RPU.
+* **HDR / Dolby Vision Guard:** HDR10/HLG is skipped unless `reconvert_hdr` is on (then BT.2020 tags are re-applied). Dolby Vision is always skipped, since re-encoding drops the RPU (the HDR to SDR plugin handles it).
+* **Optional 4K → 1080p Downscale:** With `downscale_4k_to_1080p` on, every 4K file is processed (even HEVC below the bloat threshold) and scaled on the GPU with `scale_cuda=w=1920:h=-2:interp_algo=lanczos`, using the 1080p CQ and ceiling. The aspect ratio is kept (3840×1600 → 1920×800).
 * **In-Stream Loop Prevention Flag:** It writes a metadata tag (`COPYRIGHT=processed`) into the video stream. Future scans see it and skip the file, which prevents recursive transcoding loops.
 
 > **GPU note:** the GTX 1650 (TU117) uses Volta-generation NVENC. It has no HEVC B-frames and no temporal AQ, so keep `bframes=false` there. With the settings above it encodes 1080p at about 5× real time.
 
 #### 🎛️ Input Parameters:
-* `target_bitrate_480p576p` / `target_bitrate_720p` / `target_bitrate_1080p` / `target_bitrate_4KUHD` (Number | Defaults: `2000` / `4000` / `6000` / `16000`): Max bitrate (kbps) per tier. 1440p uses 1.8× the 1080p value.
-* `target_pct_reduction` (Number | Default: `0.7`): The max bitrate never exceeds source video bitrate × this factor.
-* `cq_480p576p` / `cq_720p` / `cq_1080p` / `cq_4KUHD` (Number | Defaults: `21` / `22` / `23` / `24`): NVENC constant quality per tier. Lower means better quality and bigger files.
+* `target_bitrate_480p576p` / `target_bitrate_720p` / `target_bitrate_1080p` / `target_bitrate_4KUHD` (Number | Defaults: `2000` / `4000` / `9000` / `24000`): Max bitrate (kbps) per tier. 1440p uses 1.8× the 1080p value.
+* `target_pct_reduction` (Number | Default: `0.85`): The max bitrate never exceeds source video bitrate × this factor. NVENC without B-frames needs about 85% of the H.264 bitrate for equivalent quality.
+* `downscale_4k_to_1080p` (Boolean | Default: `true`): Downscale 4K to 1080p so it streams to more clients.
+* `cq_480p576p` / `cq_720p` / `cq_1080p` / `cq_4KUHD` (Number | Defaults: `21` / `22` / `21` / `22`): NVENC constant quality per tier. Lower means better quality and bigger files.
 * `bframes` (Boolean | Default: `false`): Adds `-bf 3 -b_ref_mode middle`. Requires Turing NVENC or newer (RTX 20xx, GTX 1660, GTX 1650 Super).
 * `deinterlace` (Boolean | Default: `true`): Deinterlace interlaced sources.
 * `reconvert_hevc` (Boolean | Default: `true`): Re-encode HEVC/VP9/AV1 whose video bitrate is above the filter thresholds.
 * `reconvert_hdr` (Boolean | Default: `false`): Re-encode HDR10/HLG keeping HDR color metadata.
-* `hevc_480p_576p_filter_bitrate` / `hevc_720p_filter_bitrate` / `hevc_1080p_filter_bitrate` / `hevc_filter_bitrate_4KUHD` (Number | Defaults: `3000` / `6000` / `9000` / `24000`): HEVC/VP9/AV1 video bitrate above which a file is re-encoded. Each is about 1.5× the tier ceiling, so a re-encode only happens when the saving is worth the generation loss.
+* `hevc_480p_576p_filter_bitrate` / `hevc_720p_filter_bitrate` / `hevc_1080p_filter_bitrate` / `hevc_filter_bitrate_4KUHD` (Number | Defaults: `3000` / `6000` / `13000` / `35000`): HEVC/VP9/AV1 video bitrate above which a file is re-encoded. Each is about 1.5× the tier ceiling, so a re-encode only happens when the saving is worth the generation loss.
 * `tagName` / `tagValues` (Strings | Default: `COPYRIGHT` / `processed`): Custom signature settings for loop protection.
 * `exactMatch` (Boolean | Default: `true`): Whether the tag value must match exactly or just be contained in the tag.
 * `continueIfTagFound` (Boolean | Default: `false`): Process the file even if the loop-protection tag is already present.
@@ -82,7 +84,8 @@ Same goal as the NVENC plugin (H.264 or bloated HEVC → 10-bit HEVC in MKV), bu
 Same inputs as the NVENC plugin, with these differences:
 * `reconvert_hdr` (Boolean | Default: `false`): HDR files are skipped unless enabled.
 * `bframes` (Boolean | Default: `false`): Adds `-bf 2 -b_strategy 1` (B-pyramid, the QSV equivalent of NVENC's `-b_ref_mode middle`).
-* All other inputs (`target_bitrate_*`, `target_pct_reduction`, `reconvert_hevc`, `hevc_*_filter_bitrate`, `tagName`, `tagValues`, `exactMatch`, `continueIfTagFound`) behave and default exactly as described in plugin #1.
+* Bitrate defaults are lower: `target_bitrate_*` `1000` / `2000` / `4000` / `8000`, `target_pct_reduction` `0.5`, `hevc_*_filter_bitrate` `2000` / `3000` / `4000` / `8000`. There is no `downscale_4k_to_1080p` option.
+* All other inputs (`reconvert_hevc`, `tagName`, `tagValues`, `exactMatch`, `continueIfTagFound`) behave exactly as described in plugin #1.
 
 ---
 
@@ -93,20 +96,24 @@ Same inputs as the NVENC plugin, with these differences:
 * **Origin:** Original plugin (no upstream).
 
 #### 🎯 Main Function:
-Detects HDR10 (PQ / `smpte2084`) and HLG (`arib-std-b67`) video and converts it permanently to SDR BT.709.
+Detects HDR10 (PQ / `smpte2084`), HLG (`arib-std-b67`) and Dolby Vision (any profile, including profile 5 with no HDR10 base layer) and converts the video permanently to SDR BT.709.
 
 > Jellyfin can tonemap HDR on the fly with NVENC. Keep this plugin enabled only if your players are SDR-only, because the conversion discards the HDR grade for good.
 
 #### 🚀 Why It Differs from Standard Plugins:
 * **GPU Tone Mapping:** `tonemap_cuda=tonemap=bt2390:peak=100:desat=0` (the same defaults Jellyfin uses) runs entirely on the GPU. CPU tonemapping with `zscale` runs at single-digit fps.
+* **Dolby Vision Reshaping:** Dolby Vision is detected by its `DOVI configuration record` and tonemapped with `apply_dovi=1`, which applies the RPU first. Without it, profile 5 (IPT-PQ-c2) shows green/purple colors. This was verified with the Jellyfin 4K DV P5 and P8.1 test videos, which produce identical SDR output. It requires jellyfin-ffmpeg (bundled with Tdarr).
+* **Source-Capped Bitrate:** The ceiling never exceeds the source video bitrate, so a forced HDR → SDR re-encode never inflates the file.
+* **Optional 4K → 1080p Downscale:** With `downscale_4k_to_1080p` on, `scale_cuda` runs after tonemapping (so frames still carry the Dolby Vision metadata) and the 1080p ceiling is used.
 * **10-bit SDR Output:** Tonemaps to `p010` and encodes HEVC Main10 with explicit BT.709 primaries/transfer/matrix, which avoids the banding an 8-bit output shows in gradients.
 * **Keeps Every Track:** It maps the main video plus all audio, subtitle and attachment streams. The previous version relied on ffmpeg's default selection and kept only one audio and one subtitle.
 * **Correct Decoder per Codec:** NVDEC is used for HEVC/VP9/H.264 in 4:2:0. Anything else (e.g. AV1 on Turing) is decoded on the CPU and uploaded to the GPU.
 * **No Double Encode:** It writes the same `COPYRIGHT=processed` tag as the NVENC plugin, so that plugin skips the SDR output.
 
 #### 🎛️ Input Parameters:
-* `cq` (Number | Default: `22`): NVENC constant quality of the SDR output.
-* `max_bitrate_1080p` / `max_bitrate_4KUHD` (Number | Defaults: `8000` / `20000`): Max bitrate ceilings in kbps.
+* `cq` (Number | Default: `19`): NVENC constant quality of the SDR output. It is higher than the transcode plugin's because this re-encode is forced even on already efficient sources.
+* `max_bitrate_1080p` / `max_bitrate_4KUHD` (Number | Defaults: `12000` / `40000`): Max bitrate ceilings in kbps, never above the source bitrate.
+* `downscale_4k_to_1080p` (Boolean | Default: `true`): Downscale 4K output to 1080p.
 * `tagName` / `tagValue` (Strings | Default: `COPYRIGHT` / `processed`): Loop-protection tag written on the output. Must match the NVENC plugin.
 
 ---

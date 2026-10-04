@@ -15,7 +15,7 @@ const details = () => ({
     capped by a per-resolution max bitrate. Hardware decoding is used only when NVDEC supports the source;
     otherwise frames are decoded on the CPU and uploaded to the GPU. Interlaced sources are deinterlaced.
     Requires an NVIDIA GPU with HEVC NVENC (GTX 16xx / RTX 20xx or newer).`,
-  Version: '2.0',
+  Version: '2.1',
   Tags: 'pre-processing,ffmpeg,nvenc h265, hdr, cuda',
   Inputs: [
     {
@@ -35,24 +35,32 @@ const details = () => ({
     {
       name: 'target_bitrate_1080p',
       type: 'number',
-      defaultValue: 6000,
+      defaultValue: 9000,
       inputUI: { type: 'text' },
       tooltip: 'Max bitrate (kbps) for 1080p. 1440p uses 1.8x this value. Quality is driven by CQ.',
     },
     {
       name: 'target_bitrate_4KUHD',
       type: 'number',
-      defaultValue: 16000,
+      defaultValue: 24000,
       inputUI: { type: 'text' },
       tooltip: 'Max bitrate (kbps) for 4K UHD. Quality is driven by CQ; this only caps complex scenes.',
     },
     {
       name: 'target_pct_reduction',
       type: 'number',
-      defaultValue: 0.7,
+      defaultValue: 0.85,
       inputUI: { type: 'text' },
       tooltip: 'The max bitrate never exceeds source video bitrate x this factor, so the output is always smaller. '
-        + 'HEVC at ~70% of the H264 bitrate keeps equivalent quality.',
+        + 'NVENC HEVC without B-frames needs ~85% of the H264 bitrate for equivalent quality.',
+    },
+    {
+      name: 'downscale_4k_to_1080p',
+      type: 'boolean',
+      defaultValue: true,
+      inputUI: { type: 'dropdown', options: ['false', 'true'] },
+      tooltip: 'Downscales 4K UHD video to 1080p (CQ/bitrate of the 1080p tier) so it streams to more clients. '
+        + '4K files are always processed when enabled, even HEVC below the bloat threshold.',
     },
     {
       name: 'cq_480p576p',
@@ -71,14 +79,14 @@ const details = () => ({
     {
       name: 'cq_1080p',
       type: 'number',
-      defaultValue: 23,
+      defaultValue: 21,
       inputUI: { type: 'text' },
       tooltip: 'NVENC constant quality for 1080p and 1440p. Lower = better quality and bigger files.',
     },
     {
       name: 'cq_4KUHD',
       type: 'number',
-      defaultValue: 24,
+      defaultValue: 22,
       inputUI: { type: 'text' },
       tooltip: 'NVENC constant quality for 4K UHD. Lower = better quality and bigger files.',
     },
@@ -129,14 +137,14 @@ const details = () => ({
     {
       name: 'hevc_1080p_filter_bitrate',
       type: 'number',
-      defaultValue: 9000,
+      defaultValue: 13000,
       inputUI: { type: 'text' },
       tooltip: 'HEVC/VP9/AV1 1080p video bitrate (kbps) above which the file is re-encoded. 1440p uses 1.8x this value.',
     },
     {
       name: 'hevc_filter_bitrate_4KUHD',
       type: 'number',
-      defaultValue: 24000,
+      defaultValue: 35000,
       inputUI: { type: 'text' },
       tooltip: 'HEVC/VP9/AV1 4K UHD video bitrate (kbps) above which the file is re-encoded.',
     },
@@ -275,12 +283,14 @@ function planEncode(file, stream, inputs, logger) {
     return null;
   }
 
-  const tier = getTier(stream, inputs);
+  const sourceTier = getTier(stream, inputs);
+  const downscale = inputs.downscale_4k_to_1080p && sourceTier.name === '4KUHD';
+  const tier = downscale ? { ...getTier({ width: 1920, height: 1080 }, inputs), name: '4KUHD → 1080p' } : sourceTier;
   const sourceKbps = getVideoBitrateKbps(file, stream);
   logger.Add(`Vídeo ${stream.codec_name} ${stream.width}x${stream.height} (${tier.name}), `
     + `bitrate ${sourceKbps ? `${Math.round(sourceKbps)} kbps` : 'desconhecido'}, pix_fmt ${stream.pix_fmt}`);
 
-  if (MODERN_CODECS.includes(stream.codec_name)) {
+  if (MODERN_CODECS.includes(stream.codec_name) && !downscale) {
     if (!inputs.reconvert_hevc) {
       logger.AddSuccess(`${stream.codec_name} e reconvert_hevc=false. Pulando.`);
       return null;
@@ -293,8 +303,11 @@ function planEncode(file, stream, inputs, logger) {
 
   const reductionCap = sourceKbps ? Math.round(sourceKbps * inputs.target_pct_reduction) : Infinity;
   const maxrate = Math.max(500, Math.min(tier.cap, reductionCap));
-  return { tier, maxrate, hdr };
+  return { tier, maxrate, hdr, downscale };
 }
+
+// Fits the video into 1920 wide keeping the aspect ratio (3840x2160 -> 1920x1080, 3840x1600 -> 1920x800).
+const DOWNSCALE_FILTER = 'scale_cuda=w=1920:h=-2:interp_algo=lanczos';
 
 function buildVideoArgs(stream, plan, inputs) {
   const interlaced = inputs.deinterlace && INTERLACED_ORDERS.includes(stream.field_order);
@@ -304,8 +317,8 @@ function buildVideoArgs(stream, plan, inputs) {
     ? '-hwaccel cuda -hwaccel_output_format cuda'
     : '-init_hw_device cuda=cu:0 -filter_hw_device cu';
   const filters = hwDecode
-    ? [interlaced && 'bwdif_cuda=0:-1:1', 'scale_cuda=format=p010le']
-    : [interlaced && 'bwdif=0:-1:1', 'format=p010le', 'hwupload_cuda'];
+    ? [interlaced && 'bwdif_cuda=0:-1:1', 'scale_cuda=format=p010le', plan.downscale && DOWNSCALE_FILTER]
+    : [interlaced && 'bwdif=0:-1:1', 'format=p010le', 'hwupload_cuda', plan.downscale && DOWNSCALE_FILTER];
 
   const tagValue = inputs.tagValues.split(',')[0].trim();
   const encoder = [
@@ -365,7 +378,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
 
   const video = buildVideoArgs(videoStream, plan, inputs);
   logger.Add(`Decode: ${video.hwDecode ? 'NVDEC (GPU)' : 'CPU + hwupload_cuda'}${video.interlaced ? ', deinterlace bwdif' : ''}`);
-  logger.AddSuccess(`Encoding HEVC 10-bit NVENC p7/hq, CQ ${plan.tier.cq}, maxrate ${plan.maxrate} kbps`);
+  logger.AddSuccess(`Encoding HEVC 10-bit NVENC p7/hq, CQ ${plan.tier.cq}, maxrate ${plan.maxrate} kbps`
+    + `${plan.downscale ? ', 4K reduzido para 1080p' : ''}`);
 
   // Map the main video explicitly (drops cover art / extra angles), keep every audio, subtitle and attachment.
   const outputArgs = [
