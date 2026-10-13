@@ -5,14 +5,17 @@ const details = () => ({
   Name: 'FelipeKbra - Smart Remove Commentary and Duplicate Audio Tracks',
   Type: 'Audio',
   Operation: 'Transcode',
-  Description: 'Removes explicit commentary and duplicate tracks (such as blind 2ch AC3), protecting the downmix chain (8ch, 6ch, and 2ch AAC).',
-  Version: '1.3',
+  Description: 'Removes explicit commentary and duplicate tracks (such as blind 2ch AC3), protecting the downmix chain (8ch, 6ch, and 2ch AAC). '
+    + 'A non-default stereo track with no descriptive title next to a surround track is treated as a probable commentary.',
+  Version: '1.4',
   Tags: 'pre-processing,audio',
   Inputs: [],
 });
 
 // "commentary", "commentaries", "comentário(s)", "comentario(s)", "commento" as whole words.
 const COMMENTARY_REGEX = /(^|[^\p{L}])(commentar(y|ies)|coment[aá]rios?|commento)([^\p{L}]|$)/iu;
+// Titles that identify a stereo/mono track as a real mix of the main audio (e.g. our own "2.0" downmix).
+const STEREO_MIX_REGEX = /(^|[^0-9.])(2\.0|1\.0)([^0-9]|$)|stereo|est[eé]reo|mono|downmix/i;
 
 const plugin = (file, librarySettings, inputs, otherArguments) => {
   const lib = require('../methods/lib')();
@@ -77,6 +80,18 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       // -----------------------------------------------------------------------
       // 2. Duplicate Detection Filter (Protects clean downmix chains and strips metadata-less tracks)
       // -----------------------------------------------------------------------
+      // Untitled, non-default stereo next to a surround track is usually a commentary without
+      // metadata (e.g. Silence remuxes: AAC 5.1 default + AAC 2.0 commentary with no title).
+      // Keeping it would stop Convert_Audio from creating the 2.0 downmix, and once the
+      // remove-by-channel-count plugin drops the surround track only the commentary is left.
+      // If it was a real stereo mix, Convert_Audio recreates one from the surround track.
+      const isDefault = stream.disposition?.default === 1;
+      if (maxChannels > 2 && channels <= 2 && !isDefault && !STEREO_MIX_REGEX.test(title)) {
+        streamsToRemove.push(stream);
+        response.infoLog += `[-] Removing untitled secondary stereo (probable commentary): [${lang}] index ${stream.index}\n`;
+        return;
+      }
+
       const isMainTrack = channels === maxChannels;
       const isIntermediateDownmix = channels >= 6; // Preserves legitimate 5.1/6.1 audio streams even when a 7.1/8ch track exists
       const isLegitDownmix = codec === 'aac' || title.includes('2.0') || title.includes('stereo');
