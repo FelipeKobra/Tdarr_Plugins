@@ -15,7 +15,7 @@ const details = () => ({
     capped by a per-resolution max bitrate. Hardware decoding is used only when NVDEC supports the source;
     otherwise frames are decoded on the CPU and uploaded to the GPU. Interlaced sources are deinterlaced.
     Requires an NVIDIA GPU with HEVC NVENC (GTX 16xx / RTX 20xx or newer).`,
-  Version: '2.2',
+  Version: '2.3',
   Tags: 'pre-processing,ffmpeg,nvenc h265, hdr, cuda',
   Inputs: [
     {
@@ -44,9 +44,10 @@ const details = () => ({
     {
       name: 'target_bitrate_1080p',
       type: 'number',
-      defaultValue: 9000,
+      defaultValue: 15000,
       inputUI: { type: 'text' },
-      tooltip: 'Max bitrate (kbps) for 1080p. 1440p uses 1.8x this value. Quality is driven by CQ.',
+      tooltip: 'Max bitrate (kbps) for 1080p. 1440p uses 1.8x this value. Quality is driven by CQ. On a GTX 1650, '
+        + 'CQ 19 capped at 9 Mbps scored VMAF 70-90 on hard 50 fps clips; 15 Mbps scored 83-91 and the curve flattens above.',
     },
     {
       name: 'target_bitrate_4KUHD',
@@ -146,7 +147,7 @@ const details = () => ({
     {
       name: 'hevc_1080p_filter_bitrate',
       type: 'number',
-      defaultValue: 13000,
+      defaultValue: 22000,
       inputUI: { type: 'text' },
       tooltip: 'HEVC/VP9/AV1 1080p video bitrate (kbps) above which the file is re-encoded. 1440p uses 1.8x this value.',
     },
@@ -343,6 +344,8 @@ function buildVideoArgs(stream, plan, inputs) {
     `-vf "${filters.filter(Boolean).join(',')}"`,
     '-preset p7 -tune hq -multipass fullres',
     `-rc vbr -cq ${plan.tier.cq} -b:v 0 -maxrate ${plan.maxrate}k -bufsize ${plan.maxrate * 2}k`,
+    // High tier: the auto-picked Main-tier level silently caps 1080p at ~12-20 Mbps, below the max bitrate.
+    '-tier high',
     '-rc-lookahead 32 -spatial-aq 1 -aq-strength 8 -surfaces 64',
     inputs.bframes ? '-bf 3 -b_ref_mode middle' : '-bf 0',
   ];

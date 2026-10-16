@@ -48,15 +48,15 @@ Transcodes older H.264 video streams or high-bitrate/bloated HEVC files into a s
 > **GPU note:** the GTX 1650 (TU117) uses Volta-generation NVENC. It has no HEVC B-frames and no temporal AQ, so keep `bframes=false` there. With the settings above it encodes 1080p at about 5× real time.
 
 #### 🎛️ Input Parameters:
-* `target_bitrate_480p576p` / `target_bitrate_720p` / `target_bitrate_1080p` / `target_bitrate_4KUHD` (Number | Defaults: `2000` / `4000` / `9000` / `24000`): Max bitrate (kbps) per tier. 1440p uses 1.8× the 1080p value.
+* `target_bitrate_480p576p` / `target_bitrate_720p` / `target_bitrate_1080p` / `target_bitrate_4KUHD` (Number | Defaults: `2000` / `4000` / `15000` / `24000`): Max bitrate (kbps) per tier. 1440p uses 1.8× the 1080p value. Encodes use `-tier high`, because the Main-tier level NVENC picks on its own silently caps 1080p below these values. On a GTX 1650 with CQ 19, hard 50 fps test clips (Xiph crowd_run / controlled_burn) scored VMAF 70.6 / 89.6 at 9 Mbps and 82.6 / 91.4 at 15 Mbps; above 15 Mbps the gain is small.
 * `target_pct_reduction` (Number | Default: `0.85`): The max bitrate never exceeds source video bitrate × this factor. NVENC without B-frames needs about 85% of the H.264 bitrate for equivalent quality.
 * `downscale_4k_to_1080p` (Boolean | Default: `true`): Downscale 4K to 1080p so it streams to more clients.
-* `cq_480p576p` / `cq_720p` / `cq_1080p` / `cq_4KUHD` (Number | Defaults: `21` / `22` / `21` / `22`): NVENC constant quality per tier. Lower means better quality and bigger files.
+* `cq_480p576p` / `cq_720p` / `cq_1080p` / `cq_4KUHD` (Number | Defaults: `19` / `20` / `19` / `20`): NVENC constant quality per tier. Lower means better quality and bigger files.
 * `bframes` (Boolean | Default: `false`): Adds `-bf 3 -b_ref_mode middle`. Requires Turing NVENC or newer (RTX 20xx, GTX 1660, GTX 1650 Super).
 * `deinterlace` (Boolean | Default: `true`): Deinterlace interlaced sources.
 * `reconvert_hevc` (Boolean | Default: `true`): Re-encode HEVC/VP9/AV1 whose video bitrate is above the filter thresholds.
 * `reconvert_hdr` (Boolean | Default: `false`): Re-encode HDR10/HLG keeping HDR color metadata.
-* `hevc_480p_576p_filter_bitrate` / `hevc_720p_filter_bitrate` / `hevc_1080p_filter_bitrate` / `hevc_filter_bitrate_4KUHD` (Number | Defaults: `3000` / `6000` / `13000` / `35000`): HEVC/VP9/AV1 video bitrate above which a file is re-encoded. Each is about 1.5× the tier ceiling, so a re-encode only happens when the saving is worth the generation loss.
+* `hevc_480p_576p_filter_bitrate` / `hevc_720p_filter_bitrate` / `hevc_1080p_filter_bitrate` / `hevc_filter_bitrate_4KUHD` (Number | Defaults: `3000` / `6000` / `22000` / `35000`): HEVC/VP9/AV1 video bitrate above which a file is re-encoded. Each is about 1.5× the tier ceiling, so a re-encode only happens when the saving is worth the generation loss.
 * `tagName` / `tagValues` (Strings | Default: `COPYRIGHT` / `processed`): Custom signature settings for loop protection.
 * `exactMatch` (Boolean | Default: `true`): Whether the tag value must match exactly or just be contained in the tag.
 * `continueIfTagFound` (Boolean | Default: `false`): Process the file even if the loop-protection tag is already present.
