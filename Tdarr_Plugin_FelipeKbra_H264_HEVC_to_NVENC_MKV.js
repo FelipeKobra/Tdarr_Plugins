@@ -15,9 +15,18 @@ const details = () => ({
     capped by a per-resolution max bitrate. Hardware decoding is used only when NVDEC supports the source;
     otherwise frames are decoded on the CPU and uploaded to the GPU. Interlaced sources are deinterlaced.
     Requires an NVIDIA GPU with HEVC NVENC (GTX 16xx / RTX 20xx or newer).`,
-  Version: '2.1',
+  Version: '2.2',
   Tags: 'pre-processing,ffmpeg,nvenc h265, hdr, cuda',
   Inputs: [
+    {
+      name: 'skip_h264_within_cap',
+      type: 'boolean',
+      defaultValue: true,
+      inputUI: { type: 'dropdown', options: ['false', 'true'] },
+      tooltip: 'Skip H264 whose video bitrate is already within the tier max bitrate. On cards without HEVC '
+        + 'B-frames (GTX 16xx) NVENC HEVC is about as efficient as x264, so re-encoding a good encode only loses '
+        + 'quality for little space. Interlaced sources and 4K downscales are still processed.',
+    },
     {
       name: 'target_bitrate_480p576p',
       type: 'number',
@@ -65,28 +74,28 @@ const details = () => ({
     {
       name: 'cq_480p576p',
       type: 'number',
-      defaultValue: 21,
+      defaultValue: 19,
       inputUI: { type: 'text' },
       tooltip: 'NVENC constant quality for 480p/576p. Lower = better quality and bigger files.',
     },
     {
       name: 'cq_720p',
       type: 'number',
-      defaultValue: 22,
+      defaultValue: 20,
       inputUI: { type: 'text' },
       tooltip: 'NVENC constant quality for 720p. Lower = better quality and bigger files.',
     },
     {
       name: 'cq_1080p',
       type: 'number',
-      defaultValue: 21,
+      defaultValue: 19,
       inputUI: { type: 'text' },
       tooltip: 'NVENC constant quality for 1080p and 1440p. Lower = better quality and bigger files.',
     },
     {
       name: 'cq_4KUHD',
       type: 'number',
-      defaultValue: 22,
+      defaultValue: 20,
       inputUI: { type: 'text' },
       tooltip: 'NVENC constant quality for 4K UHD. Lower = better quality and bigger files.',
     },
@@ -299,6 +308,14 @@ function planEncode(file, stream, inputs, logger) {
       logger.AddSuccess(`${stream.codec_name} abaixo do limite de ${tier.filter} kbps. Pulando.`);
       return null;
     }
+  }
+
+  const interlaced = inputs.deinterlace && INTERLACED_ORDERS.includes(stream.field_order);
+  if (stream.codec_name === 'h264' && inputs.skip_h264_within_cap && !downscale && !interlaced
+      && sourceKbps && sourceKbps <= tier.cap) {
+    logger.AddSuccess(`h264 de ${Math.round(sourceKbps)} kbps dentro do teto de ${tier.cap} kbps. `
+      + 'Mantendo o vídeo original (re-encode só perderia qualidade).');
+    return null;
   }
 
   const reductionCap = sourceKbps ? Math.round(sourceKbps * inputs.target_pct_reduction) : Infinity;
