@@ -6,15 +6,17 @@
 //  - Downmixed streams get codec/channel options addressed to their own output
 //    index (the original addressed the source stream and used a global -ac).
 //  - Missing 2.0/5.1 layouts are checked per language, and AAC gets an explicit bitrate.
+//  - aac_stereo also converts mono (1.0) tracks to AAC, keeping them mono. Old films often
+//    have only FLAC/AC3/PCM 1.0 audio, which a later codec cleanup would remove entirely.
 const details = () => ({
   id: 'Tdarr_Plugin_FelipeKbra_Convert_Audio',
   Stage: 'Pre-processing',
   Name: 'FelipeKbra - Convert Audio Streams',
   Type: 'Audio',
   Operation: 'Transcode',
-  Description: 'This plugin can convert any 2.0 audio track/s to AAC and can create downmixed audio tracks. '
+  Description: 'This plugin can convert any 2.0 or 1.0 audio track/s to AAC and can create downmixed audio tracks. '
     + 'Any track with more than 2 channels (2.1, 4.0, 5.0, 5.1, 6.1, 7.1...) is downmixed to 2.0. \n\n',
-  Version: '1.1.0',
+  Version: '1.2.0',
   Tags: 'pre-processing,ffmpeg,audio only,configurable',
   Inputs: [{
     name: 'aac_stereo',
@@ -27,7 +29,8 @@ const details = () => ({
         'true',
       ],
     },
-    tooltip: `Specify if any 2.0 audio tracks should be converted to aac for maximum compatability with devices.
+    tooltip: `Specify if any 2.0 or 1.0 audio tracks should be converted to aac for maximum compatability with devices.
+                    \\nMono tracks stay mono, at half the AAC bitrate.
                     \\nOptional.
              \\nExample:\\n
              true
@@ -235,9 +238,11 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       }
     }
 
-    if (inputs.aac_stereo === true && stream.codec_name !== 'aac' && channels === 2) {
-      ffmpegCommandInsert += `-c:a:${audioIdx} aac -b:a:${audioIdx} ${aacBitrate} `;
-      response.infoLog += '☒Audio track is 2 channel but is not AAC. Converting. \n';
+    if (inputs.aac_stereo === true && stream.codec_name !== 'aac' && (channels === 1 || channels === 2)) {
+      // Mono needs about half the stereo bitrate for the same quality.
+      const bitrate = channels === 1 ? `${Math.round(parseInt(aacBitrate, 10) / 2)}k` : aacBitrate;
+      ffmpegCommandInsert += `-c:a:${audioIdx} aac -b:a:${audioIdx} ${bitrate} `;
+      response.infoLog += `☒Audio track is ${channels} channel but is not AAC. Converting. \n`;
       convert = true;
     }
   });

@@ -18,6 +18,7 @@ Several plugins are forks of great work from the Tdarr community. Every derived 
 | 6 | [Smart Remove Commentary & Duplicates](#6-felipekbra---smart-remove-commentary-and-duplicate-audio-tracks) | Pre-processing | Original |
 | 7 | [Convert Audio Streams](#7-felipekbra---convert-audio-streams) | Pre-processing | Fork of Migz Convert Audio |
 | 8 | [Remux + Web Optimize Check](#8-felipekbra---remux--web-optimize-check) | Pre-processing | Fork of Migz Remux |
+| 11 | [Ensure Audio Was Not Removed](#11-felipekbra---ensure-audio-was-not-removed) | Pre-processing | Original |
 | 9 | [Radarr/Sonarr Tag Manager](#9-felipekbra---radarrsonarr-tag-manager---remove-and-add-tags) | Post-processing | Original |
 | 10 | [Notify Radarr/Sonarr](#10-felipekbra---notify-radarr-andor-sonarr-of-media-changes) | Post-processing | Original |
 
@@ -192,18 +193,19 @@ Cleans audio ecosystems inside video containers by dropping explicit director co
 * **Based on:** [`Tdarr_Plugin_MC93_Migz5ConvertAudio`](https://github.com/HaveAGitGat/Tdarr_Plugins/blob/master/Community/Tdarr_Plugin_MC93_Migz5ConvertAudio.js) (v2.6) by **Migz**.
 
 #### 🎯 Main Function:
-Converts 2.0 audio tracks to AAC for maximum device compatibility and creates missing downmixed tracks: a 5.1 AC3 track from 7.1/6.1 sources, and a 2.0 AAC track from any multichannel source.
+Converts 2.0 and 1.0 audio tracks to AAC for maximum device compatibility and creates missing downmixed tracks: a 5.1 AC3 track from 7.1/6.1 sources, and a 2.0 AAC track from any multichannel source.
 
 #### 🚀 Why It Differs from the Original:
 * **Downmix From Any Multichannel Layout:** The original only created stereo from 6/8-channel tracks. This version creates the missing 2.0 track from **any** track with more than 2 channels (2.1, 4.0, 5.0, 5.1, 6.1, 7.1, ...).
 * **Correct Per-Stream ffmpeg Addressing:** The original addressed codec options to the *source* stream index and used a global `-ac`, which could change the channel count of unrelated tracks. Every new track now gets its own `-c:a:N`, `-ac:a:N` and metadata addressed to its **output** index, so existing tracks are copied untouched.
 * **Per-Language Downmix Check:** The missing 2.0/5.1 check is done per language. A Portuguese 2.0 track no longer stops an English 5.1 track from getting its own 2.0. This matters when a later plugin removes surround tracks.
 * **Explicit AAC Bitrate:** Created or converted AAC stereo tracks use `aac_bitrate` (192k by default) instead of ffmpeg's 128k.
+* **Mono Tracks Converted Too:** `aac_stereo` also converts non-AAC 1.0 tracks to AAC, kept mono at half of `aac_bitrate`. Old films (12 Angry Men, Citizen Kane, Seven Samurai) often ship only FLAC/AC3/PCM 1.0. The original only converted 2.0 and never downmixes mono, so `MichPasCleanSubsAndAudioCodecs` later removed every audio track and the files were saved silent.
 * **Language & Title Preservation:** Downmixed tracks inherit the source language tag and get a clean title (`2.0` / `5.1`), or optionally the original title with the new layout appended (`E-AC-3 Atmos 5.1 - 2.0`). It won't produce a duplicated suffix such as `... 2.0 - 2.0`.
 * **Command-Line Safe Metadata:** Quotes, backticks, `$` and backslashes are stripped from titles/languages before they reach the ffmpeg command.
 
 #### 🎛️ Input Parameters:
-* `aac_stereo` (Boolean | Default: `false`): Convert any non-AAC 2.0 track to AAC.
+* `aac_stereo` (Boolean | Default: `false`): Convert any non-AAC 2.0 or 1.0 track to AAC.
 * `downmix` (Boolean | Default: `false`): Create missing 5.1 / 2.0 tracks from higher-channel tracks.
 * `downmix_single_track` (Boolean | Default: `false`): Only create one downmix per layout instead of one per source track.
 * `preserve_channel_title` (Boolean | Default: `false`): Append the new layout to the original title instead of replacing it.
@@ -275,6 +277,19 @@ Forces Radarr and Sonarr to instantly re-analyze the specific movie or series fi
 
 ---
 
+### 11. FelipeKbra - Ensure Audio Was Not Removed
+* **ID:** `Tdarr_Plugin_FelipeKbra_Ensure_Audio`
+* **Stage:** Pre-processing
+* **Operation:** Filter
+* **Origin:** Original plugin (no upstream).
+
+#### 🎯 Main Function:
+Safety net placed right after the last plugin that removes audio. If the original library file had audio and the working file has none left, it throws, the job is marked as errored, and Tdarr keeps the original file. The error follows the same pattern as `Tdarr_Plugin_a9he_New_file_size_check`.
+
+Files that never had audio pass through, so only a stack bug can trigger it. When it fires, find out which plugin removed the tracks before requeuing the file.
+
+---
+
 ## 🔗 Recommended Stack Order
 
 The order used in production (`plugin_order.txt`), mixing these local plugins with community ones:
@@ -289,13 +304,14 @@ The order used in production (`plugin_order.txt`), mixing these local plugins wi
 8. `Tdarr_Plugin_00td_action_remove_audio_by_channel_count` (Community)
 9. `Tdarr_Plugin_FelipeKbra_Subtitles_Extractor`
 10. `Tdarr_Plugin_MP01_MichPasCleanSubsAndAudioCodecs` (Community)
-11. `Tdarr_Plugin_00td_action_re_order_all_streams_v2` (Community)
-12. `Tdarr_Plugin_FelipeKbra_Remux`
-13. `Tdarr_Plugin_FelipeKbra_HDR_to_SDR`
-14. `Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC_MKV` (or the QSV variant on Intel hardware)
-15. `Tdarr_Plugin_a9he_New_file_size_check` (Community)
-16. `Tdarr_Plugin_z80t_keep_original_date` (Community)
-17. `Tdarr_Plugin_FelipeKbra_reload_media_on_radarr_or_sonarr`
+11. `Tdarr_Plugin_FelipeKbra_Ensure_Audio`
+12. `Tdarr_Plugin_00td_action_re_order_all_streams_v2` (Community)
+13. `Tdarr_Plugin_FelipeKbra_Remux`
+14. `Tdarr_Plugin_FelipeKbra_HDR_to_SDR`
+15. `Tdarr_Plugin_FelipeKbra_H264_HEVC_to_NVENC_MKV` (or the QSV variant on Intel hardware)
+16. `Tdarr_Plugin_a9he_New_file_size_check` (Community)
+17. `Tdarr_Plugin_z80t_keep_original_date` (Community)
+18. `Tdarr_Plugin_FelipeKbra_reload_media_on_radarr_or_sonarr`
 
 ---
 
