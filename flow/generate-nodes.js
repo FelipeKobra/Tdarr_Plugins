@@ -347,7 +347,7 @@ processFile: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegCommandEx
   var removed = command.streams.filter(function (s) { return s.removed; });
   var converted = kept.filter(function (s) { return isType('audio')(s) && s.outputArgs.includes('aac'); });
   var subtitles = (args.variables.fkSubtitleOutputs || []).map(function (o) { return o.path.split('/').pop().split('.').slice(-2).join('.'); });
-  var details = [
+  var summary = [
     'Operation: ' + label,
     'Video: ' + (args.variables.fkVideoEncoded ? 'HDR to SDR, 10-bit HEVC' : (encodes ? '10-bit HEVC encode' : 'kept without re-encoding')),
     'Audio kept: ' + listOf(kept.filter(isType('audio'))),
@@ -357,8 +357,8 @@ processFile: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegCommandEx
     'Subtitles removed: ' + listOf(removed.filter(isType('subtitle'))),
     'Other streams removed: ' + listOf(removed.filter(function (s) { return !isType('audio')(s) && !isType('subtitle')(s); })),
   ].join('\n');
-  args.jobLog(details);
-  if (command.shouldProcess) args.updateWorker({ status: label, workerLog: details });
+  args.jobLog(summary);
+  if (command.shouldProcess) args.updateWorker({ status: label, workerLog: summary });
   
   return require('../../../../CommunityFlowPlugins/ffmpegCommand/ffmpegCommandExecute/1.0.0/index.js').plugin(args);` },
 
