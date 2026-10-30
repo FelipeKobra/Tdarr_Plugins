@@ -18,10 +18,27 @@ var splitList = function (v) { return String(v).split(',').map(function (i) { re
 var markRemoved = function (streams) { streams.forEach(function (s) { s.removed = true; }); };
 var STEP = __STEP__;
 var WHY = __WHY__;
+var formatRate = function (kbps) {
+  if (!kbps) return '';
+  return kbps >= 1000 ? (kbps / 1000).toFixed(1) + ' Mbps' : Math.round(kbps) + ' kbps';
+};
+var rateOf = function (s) {
+  var bps = Number(s.bit_rate || (s.tags && (s.tags.BPS || s.tags['BPS-eng'])));
+  return Number.isFinite(bps) && bps > 0 ? bps / 1000 : 0;
+};
+var frameRate = function (s) {
+  var parts = String(s.avg_frame_rate || s.r_frame_rate || '').split('/');
+  var fps = Number(parts[0]) / Number(parts[1] || 1);
+  return Number.isFinite(fps) && fps > 0 ? Math.round(fps * 1000) / 1000 + ' fps' : '';
+};
 var describe = function (s) {
   var tags = s.tags || {};
-  var parts = [s.codec_name, s.channels ? s.channels + ' ch' : '', tags.language, tags.title ? '"' + tags.title + '"' : ''];
-  return s.codec_type + ' ' + parts.filter(Boolean).join(' ');
+  var title = tags.title ? '"' + tags.title + '"' : '';
+  var size = s.width ? s.width + 'x' + s.height : '';
+  var channels = s.channels ? s.channels + ' ch' + (s.channel_layout ? ' (' + s.channel_layout + ')' : '') : '';
+  var sampleRate = s.sample_rate ? Number(s.sample_rate) / 1000 + ' kHz' : '';
+  var parts = [s.codec_name, s.profile, size, s.pix_fmt, frameRate(s), s.color_transfer, channels, sampleRate, tags.language, title, formatRate(rateOf(s))];
+  return s.codec_type + ': ' + parts.filter(Boolean).join(', ');
 };
 var note = function (args, text) { args.variables.fkNotes = (args.variables.fkNotes || []).concat([text]); };
 // Compares the streams with the previous step, so the job report says what this step really did.
@@ -344,8 +361,9 @@ var isDovi = function (s) { return (s.side_data_list || []).some(function (sd) {
   ]);
   args.variables.fkVideoEncoded = true;
   args.jobLog('HDR to SDR, maxrate ' + maxrate + ' kbps');
-  note(args, 'Source: ' + (isDovi(video) ? 'Dolby Vision' : video.color_transfer) + ', ' + video.width + 'x' + video.height + ', about ' + Math.round(kbps || 0) + ' kbps');
-  note(args, 'Output: SDR BT.709, 10-bit HEVC, CQ ' + args.inputs.cq + ', max ' + maxrate + ' kbps' + (downscale ? ', downscaled to 1080p' : ''));` },
+  note(args, 'Source: ' + (isDovi(video) ? 'Dolby Vision' : video.color_transfer) + ', ' + video.width + 'x' + video.height + ', about ' + formatRate(kbps) + ' (' + Math.round(kbps || 0) + ' kbps)');
+  note(args, 'Decode: ' + (hwDecode ? 'GPU (NVDEC)' : 'CPU, frames uploaded to the GPU'));
+  note(args, 'Output: SDR BT.709, 10-bit HEVC, NVENC preset p5, tune hq, CQ ' + args.inputs.cq + ', max ' + formatRate(maxrate) + (downscale ? ', downscaled to 1080p' : ''));` },
 
 nvencEncode: { name: 'FK: NVENC Encode', desc: 'Same decisions as H264_HEVC_to_NVENC_MKV, on the single ffmpeg run. The video bitrate is the file bitrate minus its audio.', inputs: [],
   helpers: VIDEO_HELPERS + String.raw`
@@ -379,7 +397,7 @@ var isHdr = function (s) { return ['smpte2084', 'arib-std-b67'].includes(s.color
   var tier = downscale ? tierOf({ width: 1920, height: 1080 }) : source;
   var kbps = videoKbps(args, video);
   args.jobLog('Video ' + video.codec_name + ' ' + video.width + 'x' + video.height + ', estimated ' + Math.round(kbps || 0) + ' kbps');
-  var bitrateText = video.codec_name + ' ' + video.width + 'x' + video.height + ', about ' + Math.round(kbps || 0) + ' kbps';
+  var bitrateText = video.codec_name + ' ' + video.width + 'x' + video.height + ' (' + tier.name + '), about ' + formatRate(kbps) + ' (' + Math.round(kbps || 0) + ' kbps), ' + video.pix_fmt;
   if (MODERN.includes(video.codec_name) && !downscale && (!kbps || kbps <= tier.filter)) {
     note(args, 'Skipped: ' + bitrateText + ' is within the ' + tier.filter + ' kbps limit for ' + tier.name);
     return next(args);
@@ -401,7 +419,8 @@ var isHdr = function (s) { return ['smpte2084', 'arib-std-b67'].includes(s.color
   ]);
   args.jobLog('NVENC CQ ' + tier.cq + ', maxrate ' + maxrate + ' kbps');
   note(args, 'Source: ' + bitrateText);
-  note(args, 'Output: 10-bit HEVC, CQ ' + tier.cq + ', max ' + maxrate + ' kbps' + (downscale ? ', downscaled to 1080p' : '') + (interlaced ? ', deinterlaced' : ''));` },
+  note(args, 'Decode: ' + (hwDecode ? 'GPU (NVDEC)' : 'CPU, frames uploaded to the GPU'));
+  note(args, 'Output: 10-bit HEVC, NVENC preset p5, tune hq, CQ ' + tier.cq + ', max ' + formatRate(maxrate) + (downscale ? ', downscaled to 1080p' : '') + (interlaced ? ', deinterlaced' : ''));` },
 
 processFile: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegCommandExecute and shows what this single pass does on the worker card.', async: true, inputs: [], body: String.raw`
   var command = args.variables.ffmpegCommand;
@@ -417,9 +436,24 @@ processFile: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegCommandEx
   if (extracted) actions.push('Extract subtitles');
   else if (removed.some(isSubtitle)) actions.push('Remove subtitles');
   var status = actions.length ? actions.join(' + ') : 'Tidy up file';
-  var report = ['What this job does: ' + status, '']
+  var format = args.inputFileObj.ffProbeData.format || {};
+  var seconds = Number(format.duration) || 0;
+  var clock = new Date(seconds * 1000).toISOString().slice(11, 19);
+  var maxrateIndex = command.streams.reduce(function (found, s) { return found || (s.outputArgs.indexOf('-maxrate') >= 0 ? s.outputArgs[s.outputArgs.indexOf('-maxrate') + 1] : ''); }, '');
+  var audioKbps = kept.filter(isAudio).reduce(function (sum, s) { return sum + (s.outputArgs.includes('aac') ? 192 : rateOf(s)); }, 0);
+  var sizeLimit = maxrateIndex ? ((parseInt(maxrateIndex, 10) + audioKbps) * seconds) / 8 / 1e6 : 0;
+  var header = [
+    '── Source file ──',
+    'ℹ ' + String(args.inputFileObj._id).split('/').pop(),
+    'ℹ Size: ' + (Number(format.size) / 1e9).toFixed(2) + ' GB, duration ' + clock + ', overall ' + formatRate(Number(format.bit_rate) / 1000),
+  ].concat(args.inputFileObj.ffProbeData.streams.map(function (s) { return 'ℹ ' + describe(s); }));
+  var report = ['What this job does: ' + status, ''].concat(header, '')
     .concat((args.variables.fkReport || []).join('\n\n'), '', '── Final file ──')
-    .concat(kept.map(function (s) { return '☑ ' + describe(s); }))
+    .concat(sizeLimit ? ['ℹ Largest possible size: about ' + sizeLimit.toFixed(1) + ' GB'] : [])
+    .concat(kept.map(function (s) {
+      if (!s.outputArgs.includes('hevc_nvenc')) return '☑ ' + describe(s);
+      return '☑ video: hevc, Main 10, 10-bit' + (args.variables.fkVideoEncoded ? ', SDR BT.709' : '') + ' (encoded by this job)';
+    }))
     .join('\n');
   args.jobLog(report);
   if (command.shouldProcess) args.updateWorker({ status: status, workerLog: report });
