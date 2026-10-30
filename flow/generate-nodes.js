@@ -16,7 +16,48 @@ var isSubtitle = ofType('subtitle');
 var codecOf = function (s) { return (s.codec_name || '').toLowerCase(); };
 var splitList = function (v) { return String(v).split(',').map(function (i) { return i.trim(); }).filter(Boolean); };
 var markRemoved = function (streams) { streams.forEach(function (s) { s.removed = true; }); };
-var next = function (args) { return { outputFileObj: args.inputFileObj, outputNumber: 1, variables: args.variables }; };
+var STEP = __STEP__;
+var WHY = __WHY__;
+var describe = function (s) {
+  var tags = s.tags || {};
+  var parts = [s.codec_name, s.channels ? s.channels + ' ch' : '', tags.language, tags.title ? '"' + tags.title + '"' : ''];
+  return s.codec_type + ' ' + parts.filter(Boolean).join(' ');
+};
+var note = function (args, text) { args.variables.fkNotes = (args.variables.fkNotes || []).concat([text]); };
+// Compares the streams with the previous step, so the job report says what this step really did.
+var addSection = function (args) {
+  var command = args.variables.ffmpegCommand;
+  if (!command || !command.init) return;
+  var firstStep = !args.variables.fkSeen;
+  var seen = args.variables.fkSeen || {};
+  var changes = [];
+  command.streams.forEach(function (s) {
+    var key = String(s.index);
+    var state = (s.removed ? 'removed' : 'kept') + s.outputArgs.length;
+    var known = seen[key] !== undefined ? seen[key] : (firstStep ? 'kept0' : null);
+    seen[key] = state;
+    if (known === null) changes.push('☑ Added: ' + describe(s));
+    else if (known !== state) {
+      var last = s.outputArgs[s.outputArgs.length - 1];
+      var verb = s.outputArgs.includes('aac') ? 'Converted to AAC' : 'Changed';
+      if (last === 'default') verb = 'Now the default track';
+      if (last === '0') verb = 'No longer the default track';
+      if (s.outputArgs.includes('hevc_nvenc')) verb = 'Encoding to HEVC';
+      changes.push((s.removed ? '☒ Removed: ' : '☑ ' + verb + ': ') + describe(s));
+    }
+  });
+  var notes = (args.variables.fkNotes || []).map(function (n) { return 'ℹ ' + n; });
+  var why = changes.length && WHY ? ['Why: ' + WHY] : [];
+  var body = changes.concat(notes, why);
+  var lines = body.length ? body : ['☑ Nothing to change'];
+  args.variables.fkSeen = seen;
+  args.variables.fkNotes = [];
+  args.variables.fkReport = (args.variables.fkReport || []).concat([['── ' + STEP + ' ──'].concat(lines).join('\n')]);
+};
+var next = function (args) {
+  addSection(args);
+  return { outputFileObj: args.inputFileObj, outputNumber: 1, variables: args.variables };
+};
 `;
 
 const VIDEO_HELPERS = String.raw`
@@ -116,10 +157,12 @@ var fromSonarr = async function (inputs, name, log) {
   var alpha3 = alpha2 ? require('@cospired/i18n-iso-languages').alpha2ToAlpha3B(alpha2) : undefined;
   if (!alpha3) {
     args.jobLog('Could not resolve the native language. Keeping all audio tracks.');
+    note(args, 'Original language not found, so every audio track stays.');
     return next(args);
   }
   var keep = [alpha3].concat(splitList(args.inputs.user_langs).map(function (l) { return l.toLowerCase(); }), ['eng', 'und']);
   args.jobLog('Keeping languages: ' + keep.join(', '));
+  note(args, 'Original language: ' + alpha3 + '. Keeping: ' + keep.join(', '));
   var audio = active(args).filter(isAudio);
   var unwanted = audio.filter(function (s) { return s.tags && s.tags.language && !keep.includes(s.tags.language); });
   if (unwanted.length < audio.length) markRemoved(unwanted);` },
@@ -219,6 +262,8 @@ var sidecarPath = function (s, libraryFile, used) {
     .filter(function (c) { return !fs.existsSync(c.path) && !isDescriptive(c.stream); })
     .map(function (c) { return { index: c.stream.index, path: c.path }; });
   args.variables.fkSidecars = sidecars.map(function (c) { return c.path; });
+  var created = args.variables.fkSubtitleOutputs.map(function (o) { return o.path.split('/').pop().split('.').slice(-2).join('.'); });
+  note(args, created.length ? 'New SRT files: ' + created.join(', ') : 'Every SRT file already exists');
   markRemoved(active(args).filter(isSubtitle));` },
 
 removeUnwantedCodecs: { name: 'FK: Remove Unwanted Codecs', desc: 'Same rule as MichPasCleanSubsAndAudioCodecs.',
@@ -236,7 +281,8 @@ ensureAudio: { name: 'FK: Ensure Audio', desc: 'Same guard as Ensure_Audio, befo
   if (original > 0 && kept === 0) {
     throw new Error('All audio streams would be removed (original had ' + original + '). Aborting so the original file is not replaced.');
   }
-  args.jobLog('Audio streams: ' + kept + ' (original had ' + original + ')');` },
+  args.jobLog('Audio streams: ' + kept + ' (original had ' + original + ')');
+  note(args, 'Audio tracks: ' + kept + ' of ' + original + ' from the original');` },
 
 reorderStreams: { name: 'FK: Reorder Streams', desc: 'Same order as re_order_all_streams_v2.',
   inputs: [input('languages', 'por,eng,spa', 'Language order'), input('channels', '2,1,5.1,7.1', 'Channel order'), input('codecs', 'aac', 'Codec order')], helpers: String.raw`
@@ -254,7 +300,10 @@ var sortBy = function (streams, wanted, getValue) {
   sorted = sortBy(sorted, splitList(args.inputs.channels), function (s) { return CHANNELS[s.channels] || ''; });
   sorted = sortBy(sorted, splitList(args.inputs.languages), function (s) { return s.tags && s.tags.language !== undefined ? s.tags.language : ''; });
   sorted = sortBy(sorted, ['video', 'audio', 'subtitle'], function (s) { return s.codec_type; });
-  if (sorted.some(function (s, i) { return s !== kept[i]; })) command.shouldProcess = true;
+  if (sorted.some(function (s, i) { return s !== kept[i]; })) {
+    command.shouldProcess = true;
+    note(args, 'New order: ' + sorted.map(describe).join(', '));
+  }
   command.streams = sorted.concat(command.streams.filter(function (s) { return s.removed; }));` },
 
 conformMkv: { name: 'FK: Conform To MKV', desc: 'Same rules as Remux with force_conform: mkv container, no incompatible codecs, no data streams, genpts for legacy containers.', inputs: [], body: String.raw`
@@ -265,6 +314,7 @@ conformMkv: { name: 'FK: Conform To MKV', desc: 'Same rules as Remux with force_
   markRemoved(incompatible.concat(active(args).filter(ofType('data'))));
   if (source !== 'mkv') command.shouldProcess = true;
   if (['ts', 'avi', 'mpg', 'mpeg', 'vob'].includes(source)) command.overallInputArguments.push('-fflags', '+genpts');
+  if (source !== 'mkv') note(args, 'Container: ' + source + ' to mkv');
   command.container = 'mkv';` },
 
 hdrToSdr: { name: 'FK: HDR To SDR', desc: 'Same as HDR_to_SDR, on the single ffmpeg run: tonemap_cuda BT.2390 with Dolby Vision RPU, 10-bit HEVC NVENC.',
@@ -274,7 +324,10 @@ var HDR_TRANSFERS = ['smpte2084', 'arib-std-b67'];
 var HW_DECODE = { hevc: ['yuv420p', 'yuv420p10le', 'p010le'], vp9: ['yuv420p', 'yuv420p10le', 'p010le'], h264: ['yuv420p', 'yuvj420p'] };
 var isDovi = function (s) { return (s.side_data_list || []).some(function (sd) { return /dovi|dolby vision/i.test(sd.side_data_type || ''); }); };`, body: String.raw`
   var video = mainVideo(args);
-  if (!video || (!HDR_TRANSFERS.includes(video.color_transfer) && !isDovi(video))) return next(args);
+  if (!video || (!HDR_TRANSFERS.includes(video.color_transfer) && !isDovi(video))) {
+    note(args, 'Source is SDR, so no tone mapping is needed');
+    return next(args);
+  }
   var is4k = (video.width || 0) >= 3200 || (video.height || 0) >= 1800;
   var downscale = is4k && String(args.inputs.downscale_4k_to_1080p) === 'true';
   var configured = Number(is4k && !downscale ? args.inputs.max_bitrate_4KUHD : args.inputs.max_bitrate_1080p);
@@ -290,7 +343,9 @@ var isDovi = function (s) { return (s.side_data_list || []).some(function (sd) {
     '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_range', 'tv',
   ]);
   args.variables.fkVideoEncoded = true;
-  args.jobLog('HDR to SDR, maxrate ' + maxrate + ' kbps');` },
+  args.jobLog('HDR to SDR, maxrate ' + maxrate + ' kbps');
+  note(args, 'Source: ' + (isDovi(video) ? 'Dolby Vision' : video.color_transfer) + ', ' + video.width + 'x' + video.height + ', about ' + Math.round(kbps || 0) + ' kbps');
+  note(args, 'Output: SDR BT.709, 10-bit HEVC, CQ ' + args.inputs.cq + ', max ' + maxrate + ' kbps' + (downscale ? ', downscaled to 1080p' : ''));` },
 
 nvencEncode: { name: 'FK: NVENC Encode', desc: 'Same decisions as H264_HEVC_to_NVENC_MKV, on the single ffmpeg run. The video bitrate is the file bitrate minus its audio.', inputs: [],
   helpers: VIDEO_HELPERS + String.raw`
@@ -309,18 +364,31 @@ var tierOf = function (s) {
 };
 var isDovi = function (s) { return (s.side_data_list || []).some(function (sd) { return String(sd.side_data_type || '').toLowerCase().includes('dovi'); }); };
 var isHdr = function (s) { return ['smpte2084', 'arib-std-b67'].includes(s.color_transfer) || s.color_primaries === 'bt2020'; };`, body: String.raw`
-  if (args.variables.fkVideoEncoded) return next(args);
+  if (args.variables.fkVideoEncoded) {
+    note(args, 'Skipped: the HDR to SDR step already encodes the video');
+    return next(args);
+  }
   var alreadyDone = args.inputFileObj.ffProbeData.streams.some(function (s) { return s.tags && s.tags.COPYRIGHT === 'processed'; });
   var video = mainVideo(args);
-  if (alreadyDone || !video || isDovi(video) || isHdr(video)) return next(args);
+  if (alreadyDone || !video || isDovi(video) || isHdr(video)) {
+    note(args, alreadyDone ? 'Skipped: this file was already encoded' : 'Skipped: no standard SDR video to encode');
+    return next(args);
+  }
   var source = tierOf(video);
   var downscale = source.name === '4KUHD';
   var tier = downscale ? tierOf({ width: 1920, height: 1080 }) : source;
   var kbps = videoKbps(args, video);
   args.jobLog('Video ' + video.codec_name + ' ' + video.width + 'x' + video.height + ', estimated ' + Math.round(kbps || 0) + ' kbps');
-  if (MODERN.includes(video.codec_name) && !downscale && (!kbps || kbps <= tier.filter)) return next(args);
+  var bitrateText = video.codec_name + ' ' + video.width + 'x' + video.height + ', about ' + Math.round(kbps || 0) + ' kbps';
+  if (MODERN.includes(video.codec_name) && !downscale && (!kbps || kbps <= tier.filter)) {
+    note(args, 'Skipped: ' + bitrateText + ' is within the ' + tier.filter + ' kbps limit for ' + tier.name);
+    return next(args);
+  }
   var interlaced = INTERLACED.includes(video.field_order);
-  if (video.codec_name === 'h264' && !downscale && !interlaced && kbps && kbps <= tier.cap) return next(args);
+  if (video.codec_name === 'h264' && !downscale && !interlaced && kbps && kbps <= tier.cap) {
+    note(args, 'Skipped: ' + bitrateText + ' is within the ' + tier.cap + ' kbps cap for ' + tier.name + ', and re-encoding would only lose quality');
+    return next(args);
+  }
   var maxrate = Math.max(500, Math.min(tier.cap, kbps ? Math.round(kbps * 0.85) : Infinity));
   var hwDecode = (HW_DECODE[video.codec_name] || []).includes(video.pix_fmt);
   var scale = downscale ? ['scale_cuda=w=1920:h=-2:interp_algo=lanczos'] : [];
@@ -331,34 +399,30 @@ var isHdr = function (s) { return ['smpte2084', 'arib-std-b67'].includes(s.color
     '-rc', 'vbr', '-cq', String(tier.cq), '-b:v', '0', '-maxrate', maxrate + 'k', '-bufsize', (maxrate * 2) + 'k', '-tier', 'high',
     '-rc-lookahead', '32', '-spatial-aq', '1', '-aq-strength', '8', '-surfaces', '64', '-bf', '0',
   ]);
-  args.jobLog('NVENC CQ ' + tier.cq + ', maxrate ' + maxrate + ' kbps');` },
+  args.jobLog('NVENC CQ ' + tier.cq + ', maxrate ' + maxrate + ' kbps');
+  note(args, 'Source: ' + bitrateText);
+  note(args, 'Output: 10-bit HEVC, CQ ' + tier.cq + ', max ' + maxrate + ' kbps' + (downscale ? ', downscaled to 1080p' : '') + (interlaced ? ', deinterlaced' : ''));` },
 
 processFile: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegCommandExecute and shows what this single pass does on the worker card.', async: true, inputs: [], body: String.raw`
   var command = args.variables.ffmpegCommand;
   var encodes = command.streams.some(function (s) { return s.outputArgs.includes('hevc_nvenc'); });
-  var label = args.variables.fkVideoEncoded ? 'Cleanup + HDR to SDR' : (encodes ? 'Cleanup + NVENC Encode' : 'Stream Cleanup');
-  var describe = function (s) {
-    var parts = [s.codec_name, s.channels ? s.channels + 'ch' : '', s.tags && s.tags.language, s.tags && s.tags.title];
-    return parts.filter(Boolean).join(' ');
-  };
-  var isType = function (type) { return function (s) { return s.codec_type === type; }; };
-  var listOf = function (streams) { return streams.length ? streams.map(describe).join(', ') : 'none'; };
   var kept = command.streams.filter(function (s) { return !s.removed; });
   var removed = command.streams.filter(function (s) { return s.removed; });
-  var converted = kept.filter(function (s) { return isType('audio')(s) && s.outputArgs.includes('aac'); });
-  var subtitles = (args.variables.fkSubtitleOutputs || []).map(function (o) { return o.path.split('/').pop().split('.').slice(-2).join('.'); });
-  var summary = [
-    'Operation: ' + label,
-    'Video: ' + (args.variables.fkVideoEncoded ? 'HDR to SDR, 10-bit HEVC' : (encodes ? '10-bit HEVC encode' : 'kept without re-encoding')),
-    'Audio kept: ' + listOf(kept.filter(isType('audio'))),
-    'Audio converted to AAC: ' + listOf(converted),
-    'Audio removed: ' + listOf(removed.filter(isType('audio'))),
-    'Subtitles extracted: ' + (subtitles.length ? subtitles.join(', ') : 'none'),
-    'Subtitles removed: ' + listOf(removed.filter(isType('subtitle'))),
-    'Other streams removed: ' + listOf(removed.filter(function (s) { return !isType('audio')(s) && !isType('subtitle')(s); })),
-  ].join('\n');
-  args.jobLog(summary);
-  if (command.shouldProcess) args.updateWorker({ status: label, workerLog: summary });
+  var extracted = (args.variables.fkSubtitleOutputs || []).length > 0;
+  var actions = [];
+  if (args.variables.fkVideoEncoded) actions.push('HDR to SDR');
+  else if (encodes) actions.push('Encode to HEVC');
+  if (kept.some(function (s) { return isAudio(s) && s.outputArgs.includes('aac'); })) actions.push('Audio to AAC');
+  if (removed.some(isAudio)) actions.push('Remove audio tracks');
+  if (extracted) actions.push('Extract subtitles');
+  else if (removed.some(isSubtitle)) actions.push('Remove subtitles');
+  var status = actions.length ? actions.join(' + ') : 'Tidy up file';
+  var report = ['What this job does: ' + status, '']
+    .concat((args.variables.fkReport || []).join('\n\n'), '', '── Final file ──')
+    .concat(kept.map(function (s) { return '☑ ' + describe(s); }))
+    .join('\n');
+  args.jobLog(report);
+  if (command.shouldProcess) args.updateWorker({ status: status, workerLog: report });
   
   return require('../../../../CommunityFlowPlugins/ffmpegCommand/ffmpegCommandExecute/1.0.0/index.js').plugin(args);` },
 
@@ -368,7 +432,10 @@ prepareExecute: { name: 'FK: Prepare Single Pass', desc: 'Puts the SRT outputs o
   var outputs = args.variables.fkSubtitleOutputs || [];
   var hasWork = command.shouldProcess || outputs.length > 0
     || command.streams.some(function (s) { return s.removed || s.outputArgs.length > 0; });
-  if (!hasWork) return next(args);
+  if (!hasWork) {
+    note(args, 'The file is already as wanted, so nothing is written');
+    return next(args);
+  }
   // Execute writes the main file last, so the SRT outputs must come before the first -map of the main file.
   var extraOutputs = outputs.reduce(function (list, o) { return list.concat(['-map', '0:' + o.index, o.path]); }, []);
   kept[0].mapArgs = extraOutputs.concat(kept[0].mapArgs);
@@ -414,7 +481,9 @@ Object.entries(plugins).forEach(([id, p]) => {
     }),
     outputs: [{ number: 1, tooltip: NEXT }],
   }, null, 2);
-  const src = `${PRELUDE}${p.helpers || ''}
+  const header = PRELUDE.replace('__STEP__', () => JSON.stringify(label))
+    .replace('__WHY__', () => JSON.stringify((TEXT[id].desc.split('Why: ')[1] || '').trim()));
+  const src = `${header}${p.helpers || ''}
 var details = function () { return (${details}); };
 exports.details = details;
 var plugin = ${p.async ? 'async ' : ''}function (args) {
