@@ -124,7 +124,6 @@ const buildFlow = (id, name) => {
     ['checkFileChanged', 'Community', '1.0.0', {}],
     ['compareFileSizeRatio', 'Community', '2.0.0', { greaterThan: '6', lessThan: '130' }],
     ['compareFileDurationRatio', 'Community', '1.0.0', {}],
-    ['runHealthCheck', 'Community', '1.0.0', { type: 'thorough', gpuAcceleration: 'auto' }],
     ['replaceOriginalFile', 'Community', '1.0.0', {}],
     ['keepOriginalDate', 'Local', '1.0.0', {}],
     ['checkFlowVariable', 'Community', '1.0.0', { variable: L('arr'), condition: '==', value: 'radarr' }],
@@ -151,13 +150,13 @@ const buildFlow = (id, name) => {
     ['2. Audio\nPicks the tracks to keep and ensures AAC stereo.', ['keepNativeLanguages', 'smartAudioCleanup', 'removeAttachments', 'convertAudio', 'removeByChannelCount']],
     ['3. Subtitles and streams\nExtracts SRT, drops bad formats and sorts.', ['extractSubtitles', 'removeUnwantedCodecs', 'ensureAudio', 'reorderStreams', 'conformMkv']],
     ['4. Video and execution\nDecides the encode and runs a single ffmpeg.', ['hdrToSdr', 'nvencEncode', 'prepareExecute', 'processFile', 'cleanSubtitleTags']],
-    ['5. Validation\nContinues only if the new file is sound.', ['checkFileChanged', 'compareFileSizeRatio', 'compareFileDurationRatio', 'runHealthCheck']],
+    ['5. Validation\nContinues only if the new file is sound.', ['checkFileChanged', 'compareFileSizeRatio', 'compareFileDurationRatio']],
     ['6. Finish\nReplaces the original and tells Radarr or Sonarr.', ['replaceOriginalFile', 'keepOriginalDate', 'checkFlowVariable', 'notifyRadarrOrSonarr', 'failFlow']],
   ];
   const NAMES = {
     inputFile: 'Start: Input File', checkFileMedium: 'Check: Is It a Video?', ffmpegCommandStart: 'Command: Start',
     checkFileChanged: 'Check: Did the File Change?', compareFileSizeRatio: 'Validate: Size', compareFileDurationRatio: 'Validate: Duration',
-    runHealthCheck: 'Validate: Full Health Check', replaceOriginalFile: 'Finish: Replace Original', checkFlowVariable: 'Check: Uses Radarr?',
+    replaceOriginalFile: 'Finish: Replace Original', checkFlowVariable: 'Check: Uses Radarr?',
     failFlow: 'Failure: Keep the Original',
   };
   const COLUMN_WIDTH = 330;
