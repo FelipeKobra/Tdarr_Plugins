@@ -333,6 +333,14 @@ var isHdr = function (s) { return ['smpte2084', 'arib-std-b67'].includes(s.color
   ]);
   args.jobLog('NVENC CQ ' + tier.cq + ', maxrate ' + maxrate + ' kbps');` },
 
+processarArquivo: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegCommandExecute and shows what this single pass does on the worker card.', async: true, inputs: [], body: String.raw`
+  var command = args.variables.ffmpegCommand;
+  var encodes = command.streams.some(function (s) { return s.outputArgs.includes('hevc_nvenc'); });
+  var label = args.variables.fkVideoEncoded ? 'Limpeza + HDR para SDR' : (encodes ? 'Limpeza + Encode NVENC' : 'Limpeza de Faixas');
+  if (command.shouldProcess) args.updateWorker({ status: label });
+  args.jobLog('Passada unica: ' + label);
+  return require('../../../../CommunityFlowPlugins/ffmpegCommand/ffmpegCommandExecute/1.0.0/index.js').plugin(args);` },
+
 prepareExecute: { name: 'FK: Prepare Single Pass', desc: 'Puts the SRT outputs on the ffmpeg command and the mux options, only when there is work to do. Place right before Execute.', inputs: [], body: String.raw`
   var command = args.variables.ffmpegCommand;
   var kept = active(args);
@@ -388,6 +396,7 @@ const LABELS = {
   conformMkv: ['arquivo', 'Arquivo: Converter para MKV'],
   prepareExecute: ['arquivo', 'Arquivo: Preparar Passada Única'],
   keepOriginalDate: ['arquivo', 'Arquivo: Manter Data Original'],
+  processarArquivo: ['arquivo', 'Arquivo: Processar (Passada Única)'],
 };
 
 Object.entries(plugins).forEach(([id, p]) => {

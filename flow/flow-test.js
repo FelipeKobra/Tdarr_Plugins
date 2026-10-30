@@ -119,7 +119,7 @@ const buildFlow = (id, name) => {
     ['hdrToSdr', 'Local', '1.0.0', {}],
     ['nvencEncode', 'Local', '1.0.0', {}],
     ['prepareExecute', 'Local', '1.0.0', {}],
-    ['ffmpegCommandExecute', 'Community', '1.0.0', {}],
+    ['processarArquivo', 'Local', '1.0.0', {}],
     ['cleanSubtitleTags', 'Local', '1.0.0', {}],
     ['checkFileChanged', 'Community', '1.0.0', {}],
     ['compareFileSizeRatio', 'Community', '2.0.0', { greaterThan: '6', lessThan: '130' }],
