@@ -145,7 +145,41 @@ const buildFlow = (id, name) => {
   const sonarrId = `n${chain.length + 1}`;
   flowPlugins.push({ ...node('notifyRadarrOrSonarr', 'Community', '3.0.0', sonarrId, { arr: 'sonarr', arr_host: G('sonarr_url'), arr_api_key: G('sonarr_api_key') }), position: { x: 120 + 340 * 3, y: 170 } });
   flowEdges.push(edge(`n${chain.length - 2}`, 2, sonarrId));
-  return { _id: id, name, description: 'Stream cleanup in one ffmpeg pass, then HDR/NVENC. Per-library behaviour comes from library variables.', tags: '', flowPlugins, flowEdges };
+  // Columns of the flow canvas: title on top, nodes below. Native nodes get Portuguese names here.
+  const STAGES = [
+    ['1. Preparação\nConfere o arquivo e limpa o básico.', ['inputFile', 'checkFileMedium', 'ffmpegCommandStart', 'removeImages', 'cleanSubtitles']],
+    ['2. Áudio\nDecide quais faixas ficam e garante AAC estéreo.', ['keepNativeLanguages', 'smartAudioCleanup', 'removeAttachments', 'convertAudio', 'removeByChannelCount']],
+    ['3. Legendas e faixas\nExtrai SRT, remove formatos ruins e organiza.', ['extractSubtitles', 'removeUnwantedCodecs', 'ensureAudio', 'reorderStreams', 'conformMkv']],
+    ['4. Vídeo e execução\nDecide o encode e roda um único ffmpeg.', ['hdrToSdr', 'nvencEncode', 'prepareExecute', 'processarArquivo', 'cleanSubtitleTags']],
+    ['5. Validação\nSó segue se o arquivo novo estiver íntegro.', ['checkFileChanged', 'compareFileSizeRatio', 'compareFileDurationRatio', 'runHealthCheck']],
+    ['6. Finalização\nTroca o original e avisa o Radarr ou Sonarr.', ['replaceOriginalFile', 'keepOriginalDate', 'checkFlowVariable', 'notifyRadarrOrSonarr', 'failFlow']],
+  ];
+  const NAMES = {
+    inputFile: 'Início: Arquivo de Entrada', checkFileMedium: 'Verificar: É Vídeo?', ffmpegCommandStart: 'Comando: Iniciar',
+    checkFileChanged: 'Verificar: O Arquivo Mudou?', compareFileSizeRatio: 'Validar: Tamanho', compareFileDurationRatio: 'Validar: Duração',
+    runHealthCheck: 'Validar: Integridade Completa', replaceOriginalFile: 'Finalizar: Substituir Original', checkFlowVariable: 'Verificar: Usa Radarr?',
+    failFlow: 'Falha: Manter o Original',
+  };
+  const COLUMN_WIDTH = 330;
+  const ROW_HEIGHT = 120;
+  const FIRST_ROW = 230;
+  const titled = (plugin) => {
+    if (plugin.pluginName === 'notifyRadarrOrSonarr') return { ...plugin, name: `Avisar ${plugin.inputsDB.arr === 'radarr' ? 'Radarr' : 'Sonarr'}` };
+    return NAMES[plugin.pluginName] ? { ...plugin, name: NAMES[plugin.pluginName] } : plugin;
+  };
+  const placed = flowPlugins.map((plugin) => {
+    const column = STAGES.findIndex(([, names]) => names.includes(plugin.pluginName));
+    const siblings = flowPlugins.filter((p) => p.pluginName === plugin.pluginName);
+    const row = STAGES[column][1].indexOf(plugin.pluginName) + siblings.indexOf(plugin)
+      + (column === 5 && plugin.pluginName === 'failFlow' ? 1 : 0);
+    return { ...titled(plugin), position: { x: 60 + COLUMN_WIDTH * column, y: FIRST_ROW + ROW_HEIGHT * row } };
+  });
+  const comments = STAGES.map(([title], column) => ({
+    ...node('comment', 'Community', '1.0.0', `c${column}`, {}), name: title, position: { x: 60 + COLUMN_WIDTH * column, y: 20 },
+  }));
+  const description = 'Processa cada arquivo em um único ffmpeg: limpa faixas, garante AAC estéreo, extrai legendas para SRT e faz o encode quando compensa. '
+    + 'O original só é substituído depois das validações. Radarr ou Sonarr vêm das variáveis de biblioteca.';
+  return { _id: id, name, description, tags: '', flowPlugins: [...placed, ...comments], flowEdges };
 };
 
 const putVariable = async (existing, type, key, value) => {

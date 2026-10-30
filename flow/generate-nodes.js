@@ -46,7 +46,7 @@ var addVideoEncode = function (args, video, hwDecode, filters, rateArgs) {
   // Like the old plugins: only the main video, audio, subtitles and attachments go through an encode.
   markRemoved(active(args).filter(function (s) { return (ofType('video')(s) && s !== video) || ofType('data')(s); }));
   video.outputArgs.push.apply(video.outputArgs, ['-c:v:0', 'hevc_nvenc', '-gpu', '0', '-profile:v:0', 'main10', '-vf', filters,
-    '-preset', 'p7', '-tune', 'hq', '-multipass', 'fullres'].concat(rateArgs, ['-metadata:s:v:0', 'COPYRIGHT=processed']));
+    '-preset', 'p5', '-tune', 'hq', '-multipass', 'qres'].concat(rateArgs, ['-metadata:s:v:0', 'COPYRIGHT=processed']));
 };
 `;
 
@@ -337,8 +337,29 @@ processarArquivo: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegComm
   var command = args.variables.ffmpegCommand;
   var encodes = command.streams.some(function (s) { return s.outputArgs.includes('hevc_nvenc'); });
   var label = args.variables.fkVideoEncoded ? 'Limpeza + HDR para SDR' : (encodes ? 'Limpeza + Encode NVENC' : 'Limpeza de Faixas');
-  if (command.shouldProcess) args.updateWorker({ status: label });
-  args.jobLog('Passada unica: ' + label);
+  var describe = function (s) {
+    var parts = [s.codec_name, s.channels ? s.channels + 'ch' : '', s.tags && s.tags.language, s.tags && s.tags.title];
+    return parts.filter(Boolean).join(' ');
+  };
+  var isType = function (type) { return function (s) { return s.codec_type === type; }; };
+  var listOf = function (streams) { return streams.length ? streams.map(describe).join(', ') : 'nenhuma'; };
+  var kept = command.streams.filter(function (s) { return !s.removed; });
+  var removed = command.streams.filter(function (s) { return s.removed; });
+  var converted = kept.filter(function (s) { return isType('audio')(s) && s.outputArgs.includes('aac'); });
+  var subtitles = (args.variables.fkSubtitleOutputs || []).map(function (o) { return o.path.split('/').pop().split('.').slice(-2).join('.'); });
+  var details = [
+    'Operação: ' + label,
+    'Vídeo: ' + (args.variables.fkVideoEncoded ? 'HDR para SDR em HEVC 10-bit' : (encodes ? 'encode HEVC 10-bit' : 'mantido sem recodificar')),
+    'Áudio mantido: ' + listOf(kept.filter(isType('audio'))),
+    'Áudio convertido para AAC: ' + listOf(converted),
+    'Áudio removido: ' + listOf(removed.filter(isType('audio'))),
+    'Legendas extraídas: ' + (subtitles.length ? subtitles.join(', ') : 'nenhuma'),
+    'Legendas removidas: ' + listOf(removed.filter(isType('subtitle'))),
+    'Outras faixas removidas: ' + listOf(removed.filter(function (s) { return !isType('audio')(s) && !isType('subtitle')(s); })),
+  ].join('\n');
+  args.jobLog(details);
+  if (command.shouldProcess) args.updateWorker({ status: label, workerLog: details });
+  
   return require('../../../../CommunityFlowPlugins/ffmpegCommand/ffmpegCommandExecute/1.0.0/index.js').plugin(args);` },
 
 prepareExecute: { name: 'FK: Prepare Single Pass', desc: 'Puts the SRT outputs on the ffmpeg command and the mux options, only when there is work to do. Place right before Execute.', inputs: [], body: String.raw`
@@ -378,6 +399,7 @@ keepOriginalDate: { name: 'FK: Keep Original Date', desc: 'Same as keep_original
   }` },
 };
 
+const { LOOKS, NEXT, TEXT } = require('./node-text');
 const LABELS = {
   removeImages: ['video', 'Vídeo: Remover Capas e Imagens'],
   hdrToSdr: ['video', 'Vídeo: HDR para SDR'],
@@ -404,8 +426,13 @@ Object.entries(plugins).forEach(([id, p]) => {
   const dir = path.join(root, category, id, '1.0.0');
   fs.mkdirSync(dir, { recursive: true });
   const details = JSON.stringify({
-    name: label, description: p.desc, style: { borderColor: '#6efefc' }, tags: 'video', isStartPlugin: false, pType: '',
-    requiresVersion: '2.11.01', sidebarPosition: -1, icon: '', inputs: p.inputs, outputs: [{ number: 1, tooltip: 'Continue to next plugin' }],
+    name: label, description: TEXT[id].desc, style: LOOKS[category].style, tags: category, isStartPlugin: false, pType: '',
+    requiresVersion: '2.11.01', sidebarPosition: -1, icon: TEXT[id].icon,
+    inputs: p.inputs.map((field) => {
+      const [fieldLabel, tooltip] = (TEXT[id].inputs || {})[field.name] || [field.label, field.tooltip];
+      return { ...field, label: fieldLabel, tooltip };
+    }),
+    outputs: [{ number: 1, tooltip: NEXT }],
   }, null, 2);
   const src = `${PRELUDE}${p.helpers || ''}
 var details = function () { return (${details}); };
