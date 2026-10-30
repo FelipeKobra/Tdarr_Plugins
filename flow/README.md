@@ -1,4 +1,4 @@
-# Flow "Processar Midia"
+# Flow "Process Media"
 
 One Tdarr Flow for all libraries. Every change to a file happens in a single ffmpeg run:
 stream cleanup, AAC conversion and downmix, SRT extraction, HDR to SDR and NVENC.
@@ -7,6 +7,7 @@ This replaced the classic stack, where each plugin rewrote the whole file.
 ## Files
 
 - `generate-nodes.js`: writes the local flow nodes. Usage: `node generate-nodes.js <Plugins/FlowPlugins/LocalFlowPlugins>`
+- `node-text.js`: names, descriptions, field labels, icons and colors of the nodes.
 - `flow-test.js`: builds the flow, runs the classic vs flow comparison and installs it.
   Usage: `docker exec -i -e K=<api key> tdarr node - <mode> < flow-test.js`
   Modes: setup, compare, teardown, realfail, stabletest, hdrcase, state, install, rollback.

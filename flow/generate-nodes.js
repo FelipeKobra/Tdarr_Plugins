@@ -333,29 +333,29 @@ var isHdr = function (s) { return ['smpte2084', 'arib-std-b67'].includes(s.color
   ]);
   args.jobLog('NVENC CQ ' + tier.cq + ', maxrate ' + maxrate + ' kbps');` },
 
-processarArquivo: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegCommandExecute and shows what this single pass does on the worker card.', async: true, inputs: [], body: String.raw`
+processFile: { name: 'Processar Arquivo', desc: 'Runs the native ffmpegCommandExecute and shows what this single pass does on the worker card.', async: true, inputs: [], body: String.raw`
   var command = args.variables.ffmpegCommand;
   var encodes = command.streams.some(function (s) { return s.outputArgs.includes('hevc_nvenc'); });
-  var label = args.variables.fkVideoEncoded ? 'Limpeza + HDR para SDR' : (encodes ? 'Limpeza + Encode NVENC' : 'Limpeza de Faixas');
+  var label = args.variables.fkVideoEncoded ? 'Cleanup + HDR to SDR' : (encodes ? 'Cleanup + NVENC Encode' : 'Stream Cleanup');
   var describe = function (s) {
     var parts = [s.codec_name, s.channels ? s.channels + 'ch' : '', s.tags && s.tags.language, s.tags && s.tags.title];
     return parts.filter(Boolean).join(' ');
   };
   var isType = function (type) { return function (s) { return s.codec_type === type; }; };
-  var listOf = function (streams) { return streams.length ? streams.map(describe).join(', ') : 'nenhuma'; };
+  var listOf = function (streams) { return streams.length ? streams.map(describe).join(', ') : 'none'; };
   var kept = command.streams.filter(function (s) { return !s.removed; });
   var removed = command.streams.filter(function (s) { return s.removed; });
   var converted = kept.filter(function (s) { return isType('audio')(s) && s.outputArgs.includes('aac'); });
   var subtitles = (args.variables.fkSubtitleOutputs || []).map(function (o) { return o.path.split('/').pop().split('.').slice(-2).join('.'); });
   var details = [
-    'Operação: ' + label,
-    'Vídeo: ' + (args.variables.fkVideoEncoded ? 'HDR para SDR em HEVC 10-bit' : (encodes ? 'encode HEVC 10-bit' : 'mantido sem recodificar')),
-    'Áudio mantido: ' + listOf(kept.filter(isType('audio'))),
-    'Áudio convertido para AAC: ' + listOf(converted),
-    'Áudio removido: ' + listOf(removed.filter(isType('audio'))),
-    'Legendas extraídas: ' + (subtitles.length ? subtitles.join(', ') : 'nenhuma'),
-    'Legendas removidas: ' + listOf(removed.filter(isType('subtitle'))),
-    'Outras faixas removidas: ' + listOf(removed.filter(function (s) { return !isType('audio')(s) && !isType('subtitle')(s); })),
+    'Operation: ' + label,
+    'Video: ' + (args.variables.fkVideoEncoded ? 'HDR to SDR, 10-bit HEVC' : (encodes ? '10-bit HEVC encode' : 'kept without re-encoding')),
+    'Audio kept: ' + listOf(kept.filter(isType('audio'))),
+    'Audio converted to AAC: ' + listOf(converted),
+    'Audio removed: ' + listOf(removed.filter(isType('audio'))),
+    'Subtitles extracted: ' + (subtitles.length ? subtitles.join(', ') : 'none'),
+    'Subtitles removed: ' + listOf(removed.filter(isType('subtitle'))),
+    'Other streams removed: ' + listOf(removed.filter(function (s) { return !isType('audio')(s) && !isType('subtitle')(s); })),
   ].join('\n');
   args.jobLog(details);
   if (command.shouldProcess) args.updateWorker({ status: label, workerLog: details });
@@ -400,29 +400,9 @@ keepOriginalDate: { name: 'FK: Keep Original Date', desc: 'Same as keep_original
 };
 
 const { LOOKS, NEXT, TEXT } = require('./node-text');
-const LABELS = {
-  removeImages: ['video', 'Vídeo: Remover Capas e Imagens'],
-  hdrToSdr: ['video', 'Vídeo: HDR para SDR'],
-  nvencEncode: ['video', 'Vídeo: Encode NVENC'],
-  keepNativeLanguages: ['audio', 'Áudio: Manter Idiomas'],
-  smartAudioCleanup: ['audio', 'Áudio: Remover Comentários e Duplicatas'],
-  convertAudio: ['audio', 'Áudio: Converter para AAC'],
-  removeByChannelCount: ['audio', 'Áudio: Remover Surround'],
-  ensureAudio: ['audio', 'Áudio: Garantir que Restou Áudio'],
-  cleanSubtitles: ['legendas', 'Legendas: Limpar Faixas'],
-  extractSubtitles: ['legendas', 'Legendas: Extrair para SRT'],
-  cleanSubtitleTags: ['legendas', 'Legendas: Limpar Formatação do SRT'],
-  removeAttachments: ['faixas', 'Faixas: Remover Anexos'],
-  removeUnwantedCodecs: ['faixas', 'Faixas: Remover Codecs Indesejados'],
-  reorderStreams: ['faixas', 'Faixas: Ordenar'],
-  conformMkv: ['arquivo', 'Arquivo: Converter para MKV'],
-  prepareExecute: ['arquivo', 'Arquivo: Preparar Passada Única'],
-  keepOriginalDate: ['arquivo', 'Arquivo: Manter Data Original'],
-  processarArquivo: ['arquivo', 'Arquivo: Processar (Passada Única)'],
-};
 
 Object.entries(plugins).forEach(([id, p]) => {
-  const [category, label] = LABELS[id];
+  const { category, name: label } = TEXT[id];
   const dir = path.join(root, category, id, '1.0.0');
   fs.mkdirSync(dir, { recursive: true });
   const details = JSON.stringify({

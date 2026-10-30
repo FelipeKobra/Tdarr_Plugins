@@ -119,7 +119,7 @@ const buildFlow = (id, name) => {
     ['hdrToSdr', 'Local', '1.0.0', {}],
     ['nvencEncode', 'Local', '1.0.0', {}],
     ['prepareExecute', 'Local', '1.0.0', {}],
-    ['processarArquivo', 'Local', '1.0.0', {}],
+    ['processFile', 'Local', '1.0.0', {}],
     ['cleanSubtitleTags', 'Local', '1.0.0', {}],
     ['checkFileChanged', 'Community', '1.0.0', {}],
     ['compareFileSizeRatio', 'Community', '2.0.0', { greaterThan: '6', lessThan: '130' }],
@@ -147,24 +147,24 @@ const buildFlow = (id, name) => {
   flowEdges.push(edge(`n${chain.length - 2}`, 2, sonarrId));
   // Columns of the flow canvas: title on top, nodes below. Native nodes get Portuguese names here.
   const STAGES = [
-    ['1. Preparação\nConfere o arquivo e limpa o básico.', ['inputFile', 'checkFileMedium', 'ffmpegCommandStart', 'removeImages', 'cleanSubtitles']],
-    ['2. Áudio\nDecide quais faixas ficam e garante AAC estéreo.', ['keepNativeLanguages', 'smartAudioCleanup', 'removeAttachments', 'convertAudio', 'removeByChannelCount']],
-    ['3. Legendas e faixas\nExtrai SRT, remove formatos ruins e organiza.', ['extractSubtitles', 'removeUnwantedCodecs', 'ensureAudio', 'reorderStreams', 'conformMkv']],
-    ['4. Vídeo e execução\nDecide o encode e roda um único ffmpeg.', ['hdrToSdr', 'nvencEncode', 'prepareExecute', 'processarArquivo', 'cleanSubtitleTags']],
-    ['5. Validação\nSó segue se o arquivo novo estiver íntegro.', ['checkFileChanged', 'compareFileSizeRatio', 'compareFileDurationRatio', 'runHealthCheck']],
-    ['6. Finalização\nTroca o original e avisa o Radarr ou Sonarr.', ['replaceOriginalFile', 'keepOriginalDate', 'checkFlowVariable', 'notifyRadarrOrSonarr', 'failFlow']],
+    ['1. Preparation\nChecks the file and clears the basics.', ['inputFile', 'checkFileMedium', 'ffmpegCommandStart', 'removeImages', 'cleanSubtitles']],
+    ['2. Audio\nPicks the tracks to keep and ensures AAC stereo.', ['keepNativeLanguages', 'smartAudioCleanup', 'removeAttachments', 'convertAudio', 'removeByChannelCount']],
+    ['3. Subtitles and streams\nExtracts SRT, drops bad formats and sorts.', ['extractSubtitles', 'removeUnwantedCodecs', 'ensureAudio', 'reorderStreams', 'conformMkv']],
+    ['4. Video and execution\nDecides the encode and runs a single ffmpeg.', ['hdrToSdr', 'nvencEncode', 'prepareExecute', 'processFile', 'cleanSubtitleTags']],
+    ['5. Validation\nContinues only if the new file is sound.', ['checkFileChanged', 'compareFileSizeRatio', 'compareFileDurationRatio', 'runHealthCheck']],
+    ['6. Finish\nReplaces the original and tells Radarr or Sonarr.', ['replaceOriginalFile', 'keepOriginalDate', 'checkFlowVariable', 'notifyRadarrOrSonarr', 'failFlow']],
   ];
   const NAMES = {
-    inputFile: 'Início: Arquivo de Entrada', checkFileMedium: 'Verificar: É Vídeo?', ffmpegCommandStart: 'Comando: Iniciar',
-    checkFileChanged: 'Verificar: O Arquivo Mudou?', compareFileSizeRatio: 'Validar: Tamanho', compareFileDurationRatio: 'Validar: Duração',
-    runHealthCheck: 'Validar: Integridade Completa', replaceOriginalFile: 'Finalizar: Substituir Original', checkFlowVariable: 'Verificar: Usa Radarr?',
-    failFlow: 'Falha: Manter o Original',
+    inputFile: 'Start: Input File', checkFileMedium: 'Check: Is It a Video?', ffmpegCommandStart: 'Command: Start',
+    checkFileChanged: 'Check: Did the File Change?', compareFileSizeRatio: 'Validate: Size', compareFileDurationRatio: 'Validate: Duration',
+    runHealthCheck: 'Validate: Full Health Check', replaceOriginalFile: 'Finish: Replace Original', checkFlowVariable: 'Check: Uses Radarr?',
+    failFlow: 'Failure: Keep the Original',
   };
   const COLUMN_WIDTH = 330;
   const ROW_HEIGHT = 120;
   const FIRST_ROW = 230;
   const titled = (plugin) => {
-    if (plugin.pluginName === 'notifyRadarrOrSonarr') return { ...plugin, name: `Avisar ${plugin.inputsDB.arr === 'radarr' ? 'Radarr' : 'Sonarr'}` };
+    if (plugin.pluginName === 'notifyRadarrOrSonarr') return { ...plugin, name: `Notify ${plugin.inputsDB.arr === 'radarr' ? 'Radarr' : 'Sonarr'}` };
     return NAMES[plugin.pluginName] ? { ...plugin, name: NAMES[plugin.pluginName] } : plugin;
   };
   const placed = flowPlugins.map((plugin) => {
@@ -177,8 +177,8 @@ const buildFlow = (id, name) => {
   const comments = STAGES.map(([title], column) => ({
     ...node('comment', 'Community', '1.0.0', `c${column}`, {}), name: title, position: { x: 60 + COLUMN_WIDTH * column, y: 20 },
   }));
-  const description = 'Processa cada arquivo em um único ffmpeg: limpa faixas, garante AAC estéreo, extrai legendas para SRT e faz o encode quando compensa. '
-    + 'O original só é substituído depois das validações. Radarr ou Sonarr vêm das variáveis de biblioteca.';
+  const description = 'Processes each file in a single ffmpeg run: cleans streams, ensures AAC stereo, extracts subtitles to SRT and encodes only when it pays off. '
+    + 'The original is replaced only after validation. Library variables choose Radarr or Sonarr.';
   return { _id: id, name, description, tags: '', flowPlugins: [...placed, ...comments], flowEdges };
 };
 
@@ -259,12 +259,12 @@ const state = async () => {
 };
 
 const LIBRARIES = { osUXGslez: 'radarr', ct2vcWANM: 'sonarr', VxSmFY0sZ: 'sonarr' };
-const PRODUCTION_FLOW_ID = 'fkStreamCleanup';
+const PRODUCTION_FLOW_ID = 'processMedia';
 const install = async () => {
   const libs = await cruddb('LibrarySettingsJSONDB', 'getAll');
   await putGlobals(libs.find((l) => l.name === 'Movies'));
-  const { _id: unusedId, ...flowFields } = buildFlow(PRODUCTION_FLOW_ID, 'Processar Mídia');
-  await api('cruddb', { collection: 'FlowsJSONDB', mode: 'update', docID: PRODUCTION_FLOW_ID, obj: flowFields }).catch(() => null);
+  await cruddb('FlowsJSONDB', 'removeOne', PRODUCTION_FLOW_ID).catch(() => null);
+  await cruddb('FlowsJSONDB', 'insert', PRODUCTION_FLOW_ID, buildFlow(PRODUCTION_FLOW_ID, 'Process Media'));
   for (const [id, arr] of Object.entries(LIBRARIES)) {
     await putLibraryVars(id, arr);
     const lib = libs.find((l) => l._id === id);

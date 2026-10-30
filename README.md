@@ -334,4 +334,4 @@ All community plugins live in the official [HaveAGitGat/Tdarr_Plugins](https://g
 
 ## Flow
 
-The libraries run the Flow "Processar Midia" instead of the classic stack. See [flow/README.md](flow/README.md).
+The libraries run the Flow "Process Media" instead of the classic stack. See [flow/README.md](flow/README.md).
