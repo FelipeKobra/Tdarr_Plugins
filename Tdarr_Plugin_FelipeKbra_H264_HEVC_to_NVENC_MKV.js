@@ -408,7 +408,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     '-c:a copy -c:s copy -c:t copy -max_muxing_queue_size 9999',
   ].join(' ');
 
-  response.preset = `${video.inputArgs},${outputArgs}`;
+  // <io>, not a comma: the flow Run Classic plugin splits on every comma, cutting the -vf chain.
+  response.preset = `${video.inputArgs} <io> ${outputArgs}`;
   response.processFile = true;
   response.infoLog += logger.GetLogData();
   return response;

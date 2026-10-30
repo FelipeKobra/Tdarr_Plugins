@@ -7,7 +7,7 @@ const details = () => ({
   Description: 'Safety net for the audio cleanup plugins. If the original library file had audio and the '
     + 'working file has none left, the job is errored, so Tdarr keeps the original file untouched. '
     + 'Place it after the last plugin that removes audio streams.',
-  Version: '1.0',
+  Version: '1.1',
   Tags: 'pre-processing,audio,filter',
   Inputs: [],
 });
@@ -19,8 +19,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   const lib = require('../methods/lib')();
   // eslint-disable-next-line no-param-reassign
   inputs = lib.loadDefaultValues(inputs, details);
+  // Filter plugins stop the rest of the stack when processFile is false.
   const response = {
-    processFile: false,
+    processFile: true,
     preset: '',
     container: `.${file.container}`,
     handBrakeMode: false,

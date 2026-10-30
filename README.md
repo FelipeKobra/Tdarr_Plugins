@@ -331,3 +331,7 @@ Thanks to the authors whose work these plugins build on:
 | `HDR_to_SDR`, `Smart_Remove_Commentaries_and_Duplicates`, `Tag_Manager`, `reload_media_on_radarr_or_sonarr` | Original (no upstream) | FelipeKbra |
 
 All community plugins live in the official [HaveAGitGat/Tdarr_Plugins](https://github.com/HaveAGitGat/Tdarr_Plugins) repository.
+
+## Flow
+
+The libraries run the Flow "Processar Midia" instead of the classic stack. See [flow/README.md](flow/README.md).

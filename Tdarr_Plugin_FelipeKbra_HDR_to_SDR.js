@@ -138,7 +138,8 @@ async function plugin(file, librarySettings, inputs, otherArguments) {
     '-c:a copy -c:s copy -c:t copy -max_muxing_queue_size 9999',
   ].filter(Boolean).join(' ');
 
-  response.preset = `${inputArgs},${outputArgs}`;
+  // <io>, not a comma: the flow Run Classic plugin splits on every comma, cutting the -vf chain.
+  response.preset = `${inputArgs} <io> ${outputArgs}`;
   response.processFile = true;
   response.infoLog += `🚀 ${dovi ? `Dolby Vision P${dovi.dv_profile ?? '?'}` : transfer} → SDR BT.709 (tonemap_cuda BT.2390, 100 nits), `
     + `decode ${hwDecode ? 'NVDEC' : 'CPU'}, HEVC 10-bit CQ ${inputs.cq}, maxrate ${maxrate} kbps`
