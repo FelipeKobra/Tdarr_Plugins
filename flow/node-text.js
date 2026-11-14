@@ -111,5 +111,13 @@ const TEXT = {
     category: 'file', name: 'File: Keep Original Date', icon: 'faCalendarCheck',
     desc: 'Gives the new file the date of the original.\n\nWhy: otherwise it shows up as newly added in the media server.',
   },
+  notifyJellyfin: {
+    category: 'file', name: 'File: Notify Jellyfin', icon: 'faBell',
+    desc: 'Asks Jellyfin to re-read the new file right away. A file Jellyfin does not know yet is skipped, and a failure only leaves a note in the report.\n\nWhy: the file keeps its old date, so Jellyfin would keep the old tracks and the title could fail to play.',
+    inputs: {
+      jellyfin_url: ['Jellyfin address', 'Seen from Tdarr, e.g. http://jellyfin:8096.'],
+      jellyfin_api_key: ['Jellyfin API key', 'Created in Jellyfin under Dashboard, API Keys.'],
+    },
+  },
 };
 module.exports = { LOOKS, NEXT, TEXT };

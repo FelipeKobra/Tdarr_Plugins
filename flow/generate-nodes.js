@@ -498,6 +498,48 @@ keepOriginalDate: { name: 'FK: Keep Original Date', desc: 'Same as keep_original
       args.jobLog('Could not restore the file date: ' + err.message);
     }
   }` },
+
+notifyJellyfin: { noInit: true, async: true, inputs: [
+  input('jellyfin_url', '{{{args.userVariables.global.jellyfin_url}}}', 'Jellyfin address seen from Tdarr.'),
+  input('jellyfin_api_key', '{{{args.userVariables.global.jellyfin_api_key}}}', 'Jellyfin API key.'),
+], helpers: String.raw`
+// FullRefresh is required: Jellyfin 12.4 re-reads a file only when its date changes, and Keep Original Date keeps it.
+var REFRESH_QUERY = 'metadataRefreshMode=FullRefresh&imageRefreshMode=Default&replaceAllMetadata=false&replaceAllImages=false';
+var ITEMS_QUERY = 'Recursive=true&IncludeItemTypes=Movie,Episode,Video&Fields=Path&EnableImages=false&EnableUserData=false&EnableTotalRecordCount=false';
+var JELLYFIN_TIMEOUT_MS = 30000;
+var pickSetting = function (value, fallback) {
+  var text = String(value || '').trim();
+  return text && text.indexOf('{{{') === -1 ? text : String(fallback || '').trim();
+};
+var askJellyfin = function (args, method, url, key) {
+  return args.deps.axios({ method: method, url: url, timeout: JELLYFIN_TIMEOUT_MS,
+    headers: { Authorization: 'MediaBrowser Token="' + key + '"', Accept: 'application/json' } });
+};
+var findJellyfinItem = async function (args, base, key, file) {
+  var res = await askJellyfin(args, 'get', base + '/Items?' + ITEMS_QUERY, key);
+  var items = (res.data && res.data.Items) || [];
+  var match = items.find(function (i) { return i.Path === file; });
+  return match ? match.Id : '';
+};
+var tellJellyfin = async function (args) {
+  var globals = (args.userVariables && args.userVariables.global) || {};
+  var base = pickSetting(args.inputs.jellyfin_url, globals.jellyfin_url).replace(/\/+$/, '');
+  var key = pickSetting(args.inputs.jellyfin_api_key, globals.jellyfin_api_key);
+  if (!base || !key) return 'Jellyfin was not told: the jellyfin_url or jellyfin_api_key variable is empty.';
+  try {
+    var id = await findJellyfinItem(args, base, key, args.inputFileObj._id);
+    if (!id) return 'Jellyfin does not list this file yet, so it will read the new version when it finds it.';
+    await askJellyfin(args, 'post', base + '/Items/' + id + '/Refresh?' + REFRESH_QUERY, key);
+    return 'Jellyfin was asked to re-read this file (item ' + id + ').';
+  } catch (err) {
+    var reason = err && err.response ? 'HTTP ' + err.response.status : (err && err.code) || 'no answer';
+    return 'Could not tell Jellyfin (' + reason + '). If the title does not play, refresh it in Jellyfin.';
+  }
+};
+`, body: String.raw`
+  var message = await tellJellyfin(args);
+  args.jobLog(message);
+  note(args, message);` },
 };
 
 const { LOOKS, NEXT, TEXT } = require('./node-text');

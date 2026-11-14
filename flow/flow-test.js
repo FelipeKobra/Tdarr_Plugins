@@ -97,6 +97,7 @@ const VARIABLE_KEEP_INPUTS = {
   priority: L('arr_priority'), radarr_url: G('radarr_url'), radarr_api_key: G('radarr_api_key'),
   sonarr_url: G('sonarr_url'), sonarr_api_key: G('sonarr_api_key'), api_key: G('tmdb_api_key'),
 };
+const JELLYFIN_INPUTS = { jellyfin_url: G('jellyfin_url'), jellyfin_api_key: G('jellyfin_api_key') };
 
 const buildFlow = (id, name) => {
   const keepInputs = VARIABLE_KEEP_INPUTS;
@@ -126,6 +127,7 @@ const buildFlow = (id, name) => {
     ['compareFileDurationRatio', 'Community', '1.0.0', {}],
     ['replaceOriginalFile', 'Community', '1.0.0', {}],
     ['keepOriginalDate', 'Local', '1.0.0', {}],
+    ['notifyJellyfin', 'Local', '1.0.0', JELLYFIN_INPUTS],
     ['checkFlowVariable', 'Community', '1.0.0', { variable: L('arr'), condition: '==', value: 'radarr' }],
     ['notifyRadarrOrSonarr', 'Community', '3.0.0', { arr: 'radarr', arr_host: G('radarr_url'), arr_api_key: G('radarr_api_key') }],
   ];
@@ -151,7 +153,7 @@ const buildFlow = (id, name) => {
     ['3. Subtitles and streams\nExtracts SRT, drops bad formats and sorts.', ['extractSubtitles', 'removeUnwantedCodecs', 'ensureAudio', 'reorderStreams', 'conformMkv']],
     ['4. Video and execution\nDecides the encode and runs a single ffmpeg.', ['hdrToSdr', 'nvencEncode', 'prepareExecute', 'processFile', 'cleanSubtitleTags']],
     ['5. Validation\nContinues only if the new file is sound.', ['checkFileChanged', 'compareFileSizeRatio', 'compareFileDurationRatio']],
-    ['6. Finish\nReplaces the original and tells Radarr or Sonarr.', ['replaceOriginalFile', 'keepOriginalDate', 'checkFlowVariable', 'notifyRadarrOrSonarr', 'failFlow']],
+    ['6. Finish\nReplaces the original and tells Jellyfin and Radarr or Sonarr.', ['replaceOriginalFile', 'keepOriginalDate', 'notifyJellyfin', 'checkFlowVariable', 'notifyRadarrOrSonarr', 'failFlow']],
   ];
   const NAMES = {
     inputFile: 'Start: Input File', checkFileMedium: 'Check: Is It a Video?', ffmpegCommandStart: 'Command: Start',
@@ -274,6 +276,76 @@ const install = async () => {
   }
   console.log('installed on', Object.keys(LIBRARIES).length, 'libraries');
 };
+// Adds Notify Jellyfin to the live flow without rebuilding it. Jellyfin key comes from env J.
+const JELLYFIN_NODE_ID = 'nJellyfin';
+const addJellyfin = async () => {
+  if (!/^[0-9a-f]{32}$/.test(process.env.J || '')) throw new Error('env J must hold the Jellyfin API key');
+  const existing = await cruddb('VariablesJSONDB', 'getAll');
+  await putVariable(existing, 'global', 'jellyfin_url', 'http://jellyfin:8096');
+  await putVariable(existing, 'global', 'jellyfin_api_key', process.env.J);
+  const flow = (await cruddb('FlowsJSONDB', 'getAll')).find((f) => f._id === PRODUCTION_FLOW_ID);
+  const byName = (name) => flow.flowPlugins.find((p) => p.pluginName === name);
+  const keepDate = byName('keepOriginalDate');
+  // Runs only when the file was replaced: right after Keep Original Date, before whatever came next.
+  const link = flow.flowEdges.find((e) => e.source === keepDate.id && e.sourceHandle === '1');
+  if (!link) throw new Error('keepOriginalDate has no next step');
+  if (link.target === JELLYFIN_NODE_ID) throw new Error('Notify Jellyfin is already in the flow');
+  const arrCheck = { id: link.target };
+  const others = flow.flowPlugins.filter((p) => p.id !== JELLYFIN_NODE_ID);
+  const below = (p) => (p.position.x === keepDate.position.x && p.position.y > keepDate.position.y
+    ? { ...p, position: { ...p.position, y: p.position.y + 120 } } : p);
+  const jellyfin = { ...node('notifyJellyfin', 'Local', '1.0.0', JELLYFIN_NODE_ID, JELLYFIN_INPUTS),
+    position: { x: keepDate.position.x, y: keepDate.position.y + 120 } };
+  const edges = flow.flowEdges.filter((e) => e !== link && e.source !== JELLYFIN_NODE_ID && e.target !== JELLYFIN_NODE_ID);
+  const edge = (source, target) => ({ source, sourceHandle: '1', target, targetHandle: null, id: `${source}-1-${target}` });
+  const flowPlugins = [...others.map(below), jellyfin].map((p) => (p.id === 'c5' ? { ...p, name: '6. Finish\nReplaces the original and tells Jellyfin and Radarr or Sonarr.' } : p));
+  await api('cruddb', { collection: 'FlowsJSONDB', mode: 'update', docID: PRODUCTION_FLOW_ID, obj: {
+    flowPlugins, flowEdges: [...edges, edge(keepDate.id, JELLYFIN_NODE_ID), edge(JELLYFIN_NODE_ID, arrCheck.id)],
+  } });
+  const after = (await cruddb('FlowsJSONDB', 'getAll')).find((f) => f._id === PRODUCTION_FLOW_ID);
+  const path2 = after.flowEdges.filter((e) => [keepDate.id, JELLYFIN_NODE_ID].includes(e.source)).map((e) => `${e.source}->${e.target}`);
+  console.log('nodes', after.flowPlugins.length, 'edges', after.flowEdges.length, 'finish path', path2.join(' '));
+};
+// Runs one synthetic file through the production flow in a throwaway library, then prints its job report.
+const E2E_LIB = 'fkTestJellyfin';
+const jellyfinE2E = async () => {
+  const dir = path.join(ROOT, 'jf', 'e2e');
+  fs.rmSync(path.join(ROOT, 'jf'), { recursive: true, force: true });
+  buildFixture('e2e', { audio: [A('ac3', 6, 'eng', '', 1)], subs: [] }, dir);
+  const owner = fs.statSync('/data/media/movies');
+  execSync(`chown -R ${owner.uid}:${owner.gid} ${ROOT}`);
+  const libs = await cruddb('LibrarySettingsJSONDB', 'getAll');
+  const movies = libs.find((l) => l.name === 'Movies');
+  const { _id, createdAt, ...rest } = JSON.parse(JSON.stringify(movies));
+  await cruddb('LibrarySettingsJSONDB', 'insert', E2E_LIB, {
+    ...rest, name: E2E_LIB, folder: path.join(ROOT, 'jf'), cache: movies.cache, priority: 1000, processTranscodes: true,
+    folderWatching: false, scanOnStart: false, scheduledScanFindNew: false, processHealthChecks: false,
+    decisionMaker: { ...movies.decisionMaker, settingsPlugin: false, settingsFlows: true }, flowId: PRODUCTION_FLOW_ID,
+  });
+  await putLibraryVars(E2E_LIB, 'radarr');
+  await api('scan-files', { scanConfig: { dbID: E2E_LIB, arrayOrPath: path.join(ROOT, 'jf'), mode: 'scanFindNew' } });
+  const file = path.join(dir, `${BASE} e2e.mkv`);
+  let row;
+  for (let i = 0; i < 120; i += 1) {
+    await new Promise((r) => setTimeout(r, 5000));
+    row = (await cruddb('FileJSONDB', 'getAll')).find((f) => f.file === file);
+    if (row && i === 2) await api('cruddb', { collection: 'FileJSONDB', mode: 'update', docID: row._id, obj: { bumped: Date.now() } }).catch(() => null);
+    if (row && /success|error|Not required/i.test(row.TranscodeDecisionMaker)) break;
+  }
+  console.log('status', row && row.TranscodeDecisionMaker);
+  const reports = `/app/server/Tdarr/DB2/JobReports/${row && row._id}`;
+  const text = fs.existsSync(reports) ? fs.readdirSync(reports).map((f) => fs.readFileSync(path.join(reports, f), 'utf8')).join('\n') : '';
+  console.log(text.split('\n').filter((l) => /Jellyfin|Notify|Keep Original|cleanSidecar|Radarr/i.test(l)).slice(0, 20).join('\n'));
+};
+const jellyfinE2ECleanup = async () => {
+  await cruddb('LibrarySettingsJSONDB', 'removeOne', E2E_LIB);
+  const variables = await cruddb('VariablesJSONDB', 'getAll');
+  await Promise.all(variables.filter((v) => v.type === `library:${E2E_LIB}`).map((v) => cruddb('VariablesJSONDB', 'removeOne', v._id)));
+  const rows = (await cruddb('FileJSONDB', 'getAll')).filter((f) => f.file?.startsWith(path.join(ROOT, 'jf')));
+  await Promise.all(rows.map((f) => cruddb('FileJSONDB', 'removeOne', f._id)));
+  fs.rmSync(ROOT, { recursive: true, force: true });
+  console.log('e2e cleanup done,', rows.length, 'file rows removed');
+};
 const rollback = async () => {
   const libs = await cruddb('LibrarySettingsJSONDB', 'getAll');
   for (const id of Object.keys(LIBRARIES)) {
@@ -358,7 +430,7 @@ const teardown = async () => {
   console.log('teardown done,', rows.length, 'file rows removed');
 };
 
-if (mode !== 'hdrcase') ({ setup, compare, teardown, realfail, failtest, stabletest, state, install, rollback })[mode]().catch((err) => { console.error(err); process.exit(1); });
+if (mode !== 'hdrcase') ({ setup, compare, teardown, realfail, failtest, stabletest, state, install, rollback, jellyfin: addJellyfin, jellyfinE2E, jellyfinE2ECleanup })[mode]().catch((err) => { console.error(err); process.exit(1); });
 
 if (mode === 'hdrcase') {
   (async () => {
