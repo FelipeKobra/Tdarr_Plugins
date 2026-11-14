@@ -128,6 +128,7 @@ const buildFlow = (id, name) => {
     ['replaceOriginalFile', 'Community', '1.0.0', {}],
     ['keepOriginalDate', 'Local', '1.0.0', {}],
     ['notifyJellyfin', 'Local', '1.0.0', JELLYFIN_INPUTS],
+    ['cleanSidecarSubtitles', 'Local', '1.0.0', {}],
     ['checkFlowVariable', 'Community', '1.0.0', { variable: L('arr'), condition: '==', value: 'radarr' }],
     ['notifyRadarrOrSonarr', 'Community', '3.0.0', { arr: 'radarr', arr_host: G('radarr_url'), arr_api_key: G('radarr_api_key') }],
   ];
@@ -138,8 +139,9 @@ const buildFlow = (id, name) => {
   const flowEdges = chain.slice(1).map((_, i) => edge(`n${i}`, 1, `n${i + 1}`));
   const sizeCheck = chain.findIndex((row) => row[0] === 'compareFileSizeRatio');
   const changedCheck = chain.findIndex((row) => row[0] === 'checkFileChanged');
-  const arrCheck = chain.findIndex((row) => row[0] === 'checkFlowVariable');
-  flowEdges.push(edge(`n${changedCheck}`, 2, `n${arrCheck}`));
+  // An unchanged file skips the replacement but still gets its sidecar subtitles cleaned.
+  const sidecarClean = chain.findIndex((row) => row[0] === 'cleanSidecarSubtitles');
+  flowEdges.push(edge(`n${changedCheck}`, 2, `n${sidecarClean}`));
   const failId = `n${chain.length}`;
   flowPlugins.push({ ...node('failFlow', 'Community', '1.0.0', failId, {}), position: { x: 120 + 340 * 3, y: 60 } });
   flowEdges.push(edge(`n${sizeCheck}`, 2, failId), edge(`n${sizeCheck + 1}`, 2, failId), edge(`n${sizeCheck + 1}`, 3, failId));
@@ -153,7 +155,7 @@ const buildFlow = (id, name) => {
     ['3. Subtitles and streams\nExtracts SRT, drops bad formats and sorts.', ['extractSubtitles', 'removeUnwantedCodecs', 'ensureAudio', 'reorderStreams', 'conformMkv']],
     ['4. Video and execution\nDecides the encode and runs a single ffmpeg.', ['hdrToSdr', 'nvencEncode', 'prepareExecute', 'processFile', 'cleanSubtitleTags']],
     ['5. Validation\nContinues only if the new file is sound.', ['checkFileChanged', 'compareFileSizeRatio', 'compareFileDurationRatio']],
-    ['6. Finish\nReplaces the original and tells Jellyfin and Radarr or Sonarr.', ['replaceOriginalFile', 'keepOriginalDate', 'notifyJellyfin', 'checkFlowVariable', 'notifyRadarrOrSonarr', 'failFlow']],
+    ['6. Finish\nReplaces the original and tells Jellyfin and Radarr or Sonarr.', ['replaceOriginalFile', 'keepOriginalDate', 'notifyJellyfin', 'cleanSidecarSubtitles', 'checkFlowVariable', 'notifyRadarrOrSonarr', 'failFlow']],
   ];
   const NAMES = {
     inputFile: 'Start: Input File', checkFileMedium: 'Check: Is It a Video?', ffmpegCommandStart: 'Command: Start',
@@ -306,6 +308,24 @@ const addJellyfin = async () => {
   const path2 = after.flowEdges.filter((e) => [keepDate.id, JELLYFIN_NODE_ID].includes(e.source)).map((e) => `${e.source}->${e.target}`);
   console.log('nodes', after.flowPlugins.length, 'edges', after.flowEdges.length, 'finish path', path2.join(' '));
 };
+// Compares buildFlow with the live flow by step and link (names only, never input values).
+const diffLive = async () => {
+  const describe = (flow) => {
+    const nodes = flow.flowPlugins.filter((p) => p.pluginName !== 'comment');
+    const label = Object.fromEntries(nodes.map((p) => [p.id, `${p.pluginName}${p.inputsDB && p.inputsDB.arr ? `:${p.inputsDB.arr}` : ''}`]));
+    return {
+      steps: nodes.map((p) => `${label[p.id]} {${Object.keys(p.inputsDB || {}).sort().join(',')}}`).sort(),
+      links: flow.flowEdges.map((e) => `${label[e.source]} -${e.sourceHandle}-> ${label[e.target]}`).sort(),
+    };
+  };
+  const live = describe((await cruddb('FlowsJSONDB', 'getAll')).find((f) => f._id === PRODUCTION_FLOW_ID));
+  const built = describe(buildFlow(PRODUCTION_FLOW_ID, 'Process Media'));
+  const only = (a, b) => a.filter((x) => !b.includes(x));
+  const report = { onlyLiveSteps: only(live.steps, built.steps), onlyBuiltSteps: only(built.steps, live.steps),
+    onlyLiveLinks: only(live.links, built.links), onlyBuiltLinks: only(built.links, live.links) };
+  console.log(JSON.stringify(report, null, 1));
+  console.log(Object.values(report).every((v) => v.length === 0) ? 'IDENTICAL' : 'DIFFERENT');
+};
 // Runs one synthetic file through the production flow in a throwaway library, then prints its job report.
 const E2E_LIB = 'fkTestJellyfin';
 const jellyfinE2E = async () => {
@@ -430,7 +450,7 @@ const teardown = async () => {
   console.log('teardown done,', rows.length, 'file rows removed');
 };
 
-if (mode !== 'hdrcase') ({ setup, compare, teardown, realfail, failtest, stabletest, state, install, rollback, jellyfin: addJellyfin, jellyfinE2E, jellyfinE2ECleanup })[mode]().catch((err) => { console.error(err); process.exit(1); });
+if (mode !== 'hdrcase') ({ setup, compare, teardown, realfail, failtest, stabletest, state, install, rollback, jellyfin: addJellyfin, jellyfinE2E, jellyfinE2ECleanup, diffLive })[mode]().catch((err) => { console.error(err); process.exit(1); });
 
 if (mode === 'hdrcase') {
   (async () => {

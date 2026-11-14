@@ -8,12 +8,15 @@ This replaced the classic stack, where each plugin rewrote the whole file.
 
 - `generate-nodes.js`: writes the local flow nodes. Usage: `node generate-nodes.js <Plugins/FlowPlugins/LocalFlowPlugins>`
 - `node-text.js`: names, descriptions, field labels, icons and colors of the nodes.
+- `nodes/`: hand-written nodes that the generator copies as they are (Clean Sidecar Files).
 - `flow-test.js`: builds the flow, runs the classic vs flow comparison and installs it.
   Usage: `docker exec -i -e K=<api key> tdarr node - <mode> < flow-test.js`
-  Modes: setup, compare, teardown, realfail, stabletest, hdrcase, state, install, rollback, jellyfin.
+  Modes: setup, compare, teardown, realfail, stabletest, hdrcase, state, install, rollback, jellyfin, jellyfinE2E, jellyfinE2ECleanup, diffLive.
+  Mode diffLive compares this flow model with the live flow (steps and links only). Run it before `install`: install replaces the live flow.
   Mode jellyfin adds Notify Jellyfin to the live flow and needs `-e J=<jellyfin api key>` too.
 - `notify-jellyfin.test.js`: tests for Notify Jellyfin. Usage: `docker exec tdarr node --test /app/server/Tdarr/Plugins/Local/flow/notify-jellyfin.test.js`.
   Add `-e J=<jellyfin api key> -e LIVE_FILE=<a path Jellyfin knows>` to also check the real server.
+- `clean-sidecar.test.js`: tests for Clean Sidecar Files, run the same way.
 
 ## Rules for local flow nodes
 

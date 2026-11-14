@@ -571,4 +571,11 @@ exports.plugin = plugin;
 `;
   fs.writeFileSync(path.join(dir, 'index.js'), src);
 });
-console.log(Object.keys(plugins).length, 'plugins written');
+// Hand-written nodes kept in nodes/<id>.js, copied as they are.
+const VERBATIM = { cleanSidecarSubtitles: 'subtitles' };
+Object.entries(VERBATIM).forEach(([id, category]) => {
+  const dir = path.join(root, category, id, '1.0.0');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(__dirname, 'nodes', `${id}.js`), path.join(dir, 'index.js'));
+});
+console.log(Object.keys(plugins).length + Object.keys(VERBATIM).length, 'plugins written');
